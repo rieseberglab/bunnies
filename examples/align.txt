@@ -1,0 +1,20 @@
+
+first step:
+
+ -- alignment
+
+   -- docker container with alignment tools
+   -- input file: fastq
+   -- output file: bam
+   -- parameters: ngm parameters
+
+second step:
+
+ -- merging
+
+   -- docker container for merging files
+   -- input files: *.bam
+   -- output files: output.bam
+   -- parameters: metadata for sample name
+
+

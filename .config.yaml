@@ -1,0 +1,17 @@
+# Example config file
+#
+# Copy this file to "config.yaml", and modify according to your needs.
+#
+#
+
+# leave blank for default
+# https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
+#
+boto:
+    aws_access_key_id: ""
+    aws_secret_access_key: "",
+    aws_session_token: "",
+    profile_name: ""
+
+region: "ca-central-1"
+

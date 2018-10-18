@@ -1,0 +1,21 @@
+
+A job control lambda will divide the total work into jobs.
+
+
+Each job executes in its own namespace:
+
+
+Folder/key:
+
+ input/    -- contains job description: relations with input files and parameters
+              populated before job runs. command line entrypoint.
+
+ output/   -- contains results of the computation.
+
+ logs/     -- contains log files. stdout/stderr of job.
+
+ meta/     -- contains flag files which mark completion or failure.
+              timing information, and resource usage of the execution.
+              this is filled in by the framework.
+
+   
