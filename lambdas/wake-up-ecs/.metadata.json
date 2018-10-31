@@ -1,0 +1,14 @@
+[
+    {
+	"FunctionName": "wake-up-ecs",
+	"Runtime": "python3.6",
+	"Handler": "main.lambda_handler",
+	"Description": "starts a container in ecs, which will ask the step function for the next step",
+	"Timeout": 300,
+	"Role": "reprod-lambda-role",
+	"Environment": {
+	    "Variables": {}
+	},
+	"MemorySize": 128
+    }
+]
