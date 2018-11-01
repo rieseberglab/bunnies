@@ -2,7 +2,7 @@
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "VisualEditor0",
+            "Sid": "AllowLogging",
             "Effect": "Allow",
             "Action": [
                 "logs:CreateLogStream",
@@ -10,14 +10,20 @@
             ],
             "Resource": "arn:aws:logs:*:*:*"
         },
+	{
+	    "Sid": "AllowPassingRoleToECSTaskRoles",
+	    "Effect": "Allow",
+	    "Action": "iam:PassRole",
+	    "Resource": "*"
+	},
         {
-            "Sid": "VisualEditor1",
+            "Sid": "AllowStartingECSTasks",
             "Effect": "Allow",
             "Action": "ecs:RunTask",
             "Resource": "*"
         },
         {
-            "Sid": "VisualEditor2",
+            "Sid": "AllowCreatingLogGroups",
             "Effect": "Allow",
             "Action": "logs:CreateLogGroup",
             "Resource": "arn:aws:logs:*:*:*"
