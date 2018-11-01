@@ -18,7 +18,7 @@ def lambda_handler(event, context):
         'launchType': "FARGATE",
         'networkConfiguration': {
             'awsvpcConfiguration': {
-                'subnets': ['my-subnet'],
+                'subnets': ['subnet-00e71987140efddc6'],
                 'assignPublicIp': 'DISABLED'
             }
         }
