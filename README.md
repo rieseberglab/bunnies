@@ -20,6 +20,10 @@ Installation
 
 1. install python dependencies (includes awscli tools)
 
+       # optional, but recommended before you install deps:
+       pip install --upgrade pip
+
+       # platform dependencies
        pip install -r requirements.txt
 
 
