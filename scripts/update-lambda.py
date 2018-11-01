@@ -11,12 +11,14 @@ import tempfile
 import logging
 import json
 import base64
+import fnmatch
 
 import boto3
 from botocore.exceptions import ClientError
 
 
 EXCLUDES = [".metadata.json"]
+EXCLUDE_PATTERNS = ["*~"]
 
 def setup_logging():
     root = logging.getLogger()
@@ -33,7 +35,7 @@ log = logging.getLogger("update-lambda")
 def zip_lambda_dir(ziproot, zipfd):
     """zip files in folder, recursively, including empty folders, but excluding special files"""
     def _add_entry(dirname, basename):
-        if basename in EXCLUDES:
+        if basename in EXCLUDES or any([fnmatch.fnmatchcase(basename, patt) for patt in EXCLUDE_PATTERNS]):
             return
 
         fullname = os.path.join(dirname, basename)
