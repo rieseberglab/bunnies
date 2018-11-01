@@ -42,15 +42,20 @@
         # there will be a key called: repositoryArn which can be used to associate local images with it.
         docker tag localimage:localtag <repositoryArn>:remotetag
 
+# Creating tasks
+================
+
+Before you can invoke your containers using ECS, you need to define tasks. See `scripts/setup-tasks.sh`.
+
 Other commands: 
 ===============
 
 1. List current ECR repositories:
 
-    aws ecr describe-repositories
+       aws ecr describe-repositories
 
     Full instructions are [here](https://docs.aws.amazon.com/AmazonECR/latest/userguide/ECR_AWSCLI.html).
 
 3. Delete a repo and all its images
 
-      aws ecr delete-repository --repository-name <reponame> --force
+       aws ecr delete-repository --repository-name <reponame> --force

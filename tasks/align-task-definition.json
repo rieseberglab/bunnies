@@ -1,0 +1,31 @@
+{
+    "family": "align-task",
+    "networkMode": "awsvpc",
+    "containerDefinitions": [
+	{
+	    "name": "aligner",
+	    "image": "458136422280.dkr.ecr.ca-central-1.amazonaws.com/align",
+	    "logConfiguration": {
+		"logDriver": "awslogs",
+		"options": {
+		    "awslogs-group": "/ecs/align-task-definition",
+		    "awslogs-region": "ca-central-1",
+		    "awslogs-stream-prefix": "aligner"
+		}
+	    },
+	    "links": [],
+	    "portMappings": [],
+	    "essential": true,
+	    "command": ["ls", "-l", "--", "/home", "/test/test/test/", "/tmp/"],
+	    "entryPoint": ["/bin/bash", "-c"],
+	    "environment": [{"name": "JOBSPEC", "value": "OVERRIDE_WITH_S3_JOB_SPEC_KEY"}],
+	    "linuxParameters": {},
+	    "user": "root",
+	    "privileged": false
+	}
+    ],
+    "volumes": [],
+    "requiresCompatibilities": ["FARGATE"],
+    "cpu": "4 vcpu",
+    "memory": "8192"
+}
