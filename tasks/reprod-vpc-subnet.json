@@ -1,0 +1,4 @@
+{
+    "CidrBlock": "172.30.0.0/18",
+    "VpcId": "override on cli"
+}
