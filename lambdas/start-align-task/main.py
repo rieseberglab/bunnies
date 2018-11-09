@@ -4,6 +4,8 @@ import os
 import boto3
 import botocore
 
+import bunnies
+
 def lambda_handler(event, context):
     #print("Received event: " + json.dumps(event, indent=2))
     print("value1 = " + event['key1'])
@@ -16,9 +18,21 @@ def lambda_handler(event, context):
         'taskDefinition': "align-task",
         'cluster': "reprod",
         'launchType': "FARGATE",
+
+        "containerOverrides": [
+            {
+                "environment": [
+                    {
+                        "name": "JOBSPEC",
+                        "value": "the actual job spec"
+                    }
+                ],
+            }
+        ],
+
         'networkConfiguration': {
             'awsvpcConfiguration': {
-                'subnets': ['subnet-00e71987140efddc6'],
+                'subnets': [bunnies.config['subnet_id']],
                 'assignPublicIp': 'DISABLED'
             }
         }
