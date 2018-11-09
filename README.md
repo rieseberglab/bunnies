@@ -45,7 +45,30 @@ Installation
 
    It's a good idea to `chmod go-rw ~/.aws/credentials` too.
 
-   While you're working on `reprod`, you may then wish to export the
-   AWS_PROFILE environment variable to pick the desired account.
+Setup
+========
+
+While you're working on `reprod`, you may then wish to export the
+AWS_PROFILE environment variable to pick the desired account. If this
+is not custmized, the aws cli tools will use the default account.
 
        export AWS_PROFILE=reprod
+
+Resources
+----------
+
+To get started, a few platform resources need to be created and configured in your AWS account.
+
+   - IAM roles and permissions for S3, EC2, ECS.
+   - S3 buckets
+   - EC2 VPCs
+   - API Gateway pipeline management endpoints.
+
+These resources are created using the scripts provided in
+`./scripts/`. FIXME provide more detailed description.
+
+More resources will be generated when the pipeline definitions are converted into AWS concepts:
+
+   - Lambdas
+   - ECS Tasks
+   - S3 Buckets to store temporary data
