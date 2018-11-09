@@ -117,8 +117,11 @@ setup(
     # installed, so they must be valid existing projects.
     #
     # For an analysis of "install_requires" vs pip's requirements files see:
-    # https://packaging.python.org/en/latest/requirements.html
-    install_requires=['requests', 'boto3', 'awscli'],  # Optional
+    #https://packaging.python.org/en/latest/requirements.html
+    #
+    # We do have dependencies, like boto3, but they are included by default
+    # in the AWS runtime.
+    install_requires=[],  # Optional
 
     # List additional groups of dependencies here (e.g. development
     # dependencies). Users will be able to install these using the "extras"
@@ -130,6 +133,8 @@ setup(
     # projects.
     extras_require={  # Optional
         'dev': ['pylint'],
+        'lambda': [],
+        'build': ['requests', 'boto3', 'awscli']
     },
 
     # If there are data files included in your packages that need to be

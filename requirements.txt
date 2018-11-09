@@ -8,4 +8,4 @@
 #    pip install -r requirements.txt
 #
 
--e platform/python3.6
+-e platform/python3.6[build]
