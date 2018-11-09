@@ -1,0 +1,3 @@
+class BunniesException(Exception):
+    pass
+

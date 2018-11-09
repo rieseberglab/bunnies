@@ -8,5 +8,4 @@
 #    pip install -r requirements.txt
 #
 
-boto3
-awscli
+-e platform/python3.6
