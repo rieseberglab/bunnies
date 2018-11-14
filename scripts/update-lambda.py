@@ -71,9 +71,9 @@ def main():
     setup_logging()
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("lambdadir", metavar="OUTPUTDIR", help="location where lambda files are placed")
+    parser.add_argument("lambdadir", metavar="LAMBDADIR", help="location where input lambda files are placed")
     parser.add_argument("--workdir", metavar="WORKDIR", type=str, default="/tmp/",
-                        help="working directory")
+                        help="working directory (temp)")
 
     args = parser.parse_args()
 

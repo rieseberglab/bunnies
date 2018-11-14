@@ -3,34 +3,36 @@
 
 Info: https://aws.amazon.com/blogs/compute/better-together-amazon-ecs-and-aws-lambda/
 
-0. set up IAM role for reprod lambdas
+You will need to setup a few things before the platform-created lambdas have sufficient
+permissions to orchestrate compute tasks.
 
-  aws iam create-role \
-      --role-name reprod-lambda-role \
-      --path / \
-      --description "role for reprod lambdas" \
-      --assume-role-policy-document file://reprod-lambda-trust-relationship.json
+The lambdas created by the platform are assigned a common role.
 
-  aws iam put-role-policy \
-      --role-name reprod-lambda-role \
-      --policy-name reprod_lambda_permissions \
-      --policy-document file://reprod-lambda-policy.json
+## Initial setup
 
-1. set up S3 bucket:
+Make sure your AWS_PROFILE is set appropriately, and run
+`<repodir>/scripts/setup-lambda.sh` to create the roles and trust
+permissions for lambdas to use.
 
-  aws s3 mb s3://my-bucket
+## Deployment
 
-2. Create the lambda function:
+_Note: For the moment, the only lambdas created are platform lambdas for orchestration_
 
-      zip the stuff.
+You may place lambdas you have as tasks in directories, with a special metadata file named `.metadata.json` at the root.
+This is a deployment "recipe" for the lambda directory. It contains an array of entry points. One lambda will be created per
+entry point.
 
-      aws lambda create-function \
-           --region ca-central-1 \
-           --function-name wake-up-ecs \
-           --zip-file fileb://foo.zip \
-           --runtime python3.6 \
-           --handler main.lambda_handler \
-           --timeout 15 \
-           --memory-size 512
-
-                      
+    [
+        {
+            "FunctionName": "start-align-task",
+            "Runtime": "python3.6",
+            "Handler": "main.lambda_handler",
+            "Description": "starts an alignment container in ecs",
+            "Timeout": 300,
+            "Role": "reprod-lambda-role",
+            "Environment": {
+                "Variables": {}
+            },
+            "MemorySize": 128
+        }
+    ]

@@ -73,7 +73,8 @@ More resources will be generated when the pipeline definitions are converted int
 These resources are created using the scripts provided in
 `./scripts/`. FIXME provide more detailed description.
 
-   - `./scripts/setup-network.sh` creates network configuration usable by tasks. outputs created ids in `./network-settings.json`.
+   - `./scripts/setup-lambda.sh`  creates roles with permissions for platform-created lambdas.
 
+   - `./scripts/setup-network.sh` creates network configuration usable by tasks. outputs created ids in `./network-settings.json`.
    - `./scripts/setup-tasks.sh` creates task configuration based on available tasks. Currently using mostly hardcoded values
       sufficient to drive the example. The created entities are saved in `cluster-settings.json`
