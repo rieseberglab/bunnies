@@ -4,19 +4,20 @@
     "containerDefinitions": [
 	{
 	    "name": "aligner",
-	    "image": "458136422280.dkr.ecr.ca-central-1.amazonaws.com/align",
+	    "image": "458136422280.dkr.ecr.ca-central-1.amazonaws.com/align:1",
 	    "logConfiguration": {
 		"logDriver": "awslogs",
 		"options": {
-		    "awslogs-group": "/ecs/align-task-definition",
-		    "awslogs-region": "ca-central-1",
-		    "awslogs-stream-prefix": "aligner"
+                    "awslogs-create-group": "true",
+		    "awslogs-group": "/ecs/align-task",
+		    "awslogs-region": "{REGION}",
+		    "awslogs-stream-prefix": "ecs"
 		}
 	    },
 	    "links": [],
 	    "portMappings": [],
 	    "essential": true,
-	    "command": ["ls", "-l", "--", "/home", "/test/test/test/", "/tmp/"],
+	    "command": ["/bin/ls -l -- /home /test/test/test/ /tmp/"],
 	    "entryPoint": ["/bin/bash", "-c"],
 	    "environment": [{"name": "JOBSPEC", "value": "OVERRIDE_WITH_S3_JOB_SPEC_KEY"}],
 	    "linuxParameters": {},
