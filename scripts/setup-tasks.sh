@@ -49,6 +49,33 @@ function placeholders () {
     local region=$(aws configure get region)
     osed "s@{REGION}@$(aws configure get region)@g"
 }
+
+# This must be done for each repo
+# aws ecr create-repository --repository-name reprod | tee repo-setting.json
+# {
+#     "repositories": [
+#         {
+#             "repositoryUri": "879518704116.dkr.ecr.us-west-2.amazonaws.com/reprod",
+#             "repositoryArn": "arn:aws:ecr:us-west-2:879518704116:repository/reprod",
+#             "registryId": "879518704116",
+#             "createdAt": 1542179378.0,
+#             "repositoryName": "reprod"
+#         }
+#     ]
+# }
+# $ aws ecr describe-repositories --repository-names reprod
+# {
+#     "repositories": [
+#         {
+#             "repositoryName": "reprod",
+#             "repositoryArn": "arn:aws:ecr:us-west-2:879518704116:repository/reprod",
+#             "repositoryUri": "879518704116.dkr.ecr.us-west-2.amazonaws.com/reprod",
+#             "registryId": "879518704116",
+#             "createdAt": 1542179378.0
+#         }
+#     ]
+# }
+
 # FIXME -- the execution role for dockerd is the same as the one for the container.
 #          they could, and should be different.
 for definition in "$HERE"/../tasks/*-task-definition.json; do
@@ -61,3 +88,4 @@ for definition in "$HERE"/../tasks/*-task-definition.json; do
 	--task-role-arn reprod-ecs-role
     rm -- "$tmpdef"
 done
+
