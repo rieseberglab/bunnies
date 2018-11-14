@@ -21,7 +21,7 @@ function undo () {
     local policynames
     local name
 
-    policynames=$(aws iam list-role-policies --role-name "$ROLENAME" | json_key PolicyNames)
+    policynames=( $(aws iam list-role-policies --role-name "$ROLENAME" | json_key PolicyNames) )
     for name in "${policynames[@]}"; do
 	aws iam delete-role-policy --role-name "$ROLENAME" --policy-name "$name"
     done
