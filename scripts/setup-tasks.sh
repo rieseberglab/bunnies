@@ -44,9 +44,20 @@ echo \
 
 # create test task definition for align container
 
+function placeholders () {
+    local subst
+    local region=$(aws configure get region)
+    osed "s@{REGION}@$(aws configure get region)@g"
+}
 # FIXME -- the execution role for dockerd is the same as the one for the container.
 #          they could, and should be different.
-aws ecs register-task-definition \
-    --cli-input-json file://"$HERE"/../tasks/align-task-definition.json \
-    --execution-role-arn reprod-ecs-role \
-    --task-role-arn reprod-ecs-role
+for definition in "$HERE"/../tasks/*-task-definition.json; do
+    tmpdef=$(mktemp --tmpdir setup-tasks-XXXXXXXX.json)
+    placeholders < "$definition" > "$tmpdef"
+
+    aws ecs register-task-definition \
+	--cli-input-json file://$(readlink -f "$tmpdef") \
+	--execution-role-arn reprod-ecs-role \
+	--task-role-arn reprod-ecs-role
+    rm -- "$tmpdef"
+done
