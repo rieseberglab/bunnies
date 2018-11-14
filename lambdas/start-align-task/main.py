@@ -18,18 +18,19 @@ def lambda_handler(event, context):
         'taskDefinition': "align-task",
         'cluster': "reprod",
         'launchType': "FARGATE",
-
-        "containerOverrides": [
-            {
-                "environment": [
-                    {
-                        "name": "JOBSPEC",
-                        "value": "the actual job spec"
-                    }
-                ],
-            }
-        ],
-
+        'overrides': {
+            "containerOverrides": [
+                {
+                    'name': 'aligner', # name of container config to override. from task definition.
+                    'environment': [
+                        {
+                            'name': "JOBSPEC",
+                            'value': "the actual job spec"
+                        }
+                    ],
+                }
+            ]
+        },
         'networkConfiguration': {
             'awsvpcConfiguration': {
                 'subnets': [bunnies.config['subnet_id']],
@@ -38,6 +39,5 @@ def lambda_handler(event, context):
         }
     })
     print(resp)
-    console.log('ECS has been triggered.')
     return event['key1']  # Echo back the first key value
     #raise Exception('Something went wrong')
