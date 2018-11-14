@@ -31,10 +31,10 @@ Installation
 
        mkdir -p ~/.aws
 
-   Add a section in `~/.aws/config`:
+   Add a section in `~/.aws/config`.:
    
        [profile reprod]
-       region=ca-central-1
+       region=us-west-2
        output=json
 
    Update your credentials file `~/.aws/credentials` (section header syntax differs from config file):
@@ -44,6 +44,8 @@ Installation
        aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 
    It's a good idea to `chmod go-rw ~/.aws/credentials` too.
+
+   _Note: The region you pick here should be one where FARGATE is supported._
 
 Setup
 ========
