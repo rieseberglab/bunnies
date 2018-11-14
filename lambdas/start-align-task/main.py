@@ -34,7 +34,7 @@ def lambda_handler(event, context):
         'networkConfiguration': {
             'awsvpcConfiguration': {
                 'subnets': [bunnies.config['subnet_id']],
-                'assignPublicIp': 'DISABLED'
+                'assignPublicIp': 'ENABLED' # FIXME Despite the vpc having an internet gateway, ENABLED is necessary for the ECS agent to pull the docker image.
             }
         }
     })
