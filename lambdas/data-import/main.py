@@ -26,8 +26,10 @@
 # }
 #
 # output = {
-#     "errors": [
-#        {"input": ..., "output": ..., msg: "error message"}, ...
+#     "error_count": int,
+#     "results": [
+#        {"input": inputurl, "output": finaloutputurl, "digests": {"md5": ..., "sha1": ...}}, # ok result
+#        {"input": inputurl, "output": outputurl, "error": "error message"}, ...
 #     ]
 # }
 
@@ -40,17 +42,15 @@ import json
 import os, sys
 import requests
 import logging
-import threading
+import uuid
 from urllib.parse import urlparse
-
+from helpers import ProgressPercentage, HashingReader
 
 import bunnies
 
 # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
-
 META_PREFIX = "x-amz-meta-"
-SHA1_HEADER = "x-amz-meta-sha1"
-MD5_HEADER = "x-amz-meta-md5"
+DIGEST_HEADER = META_PREFIX + "digest-" # + algo.lowercase()
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
@@ -69,24 +69,6 @@ log = logging.getLogger(__name__)
 class ImportError(Exception):
     pass
 
-class ProgressPercentage(object):
-    def __init__(self, size=-1, logprefix=""):
-        self._size = size
-        self._logprefix = logprefix
-        self._seen_so_far = 0
-        self._lock = threading.Lock()
-
-    def __call__(self, bytes_amount):
-        with self._lock:
-            self._seen_so_far += bytes_amount
-            prog_siz = self._seen_so_far // (1024*1024)
-            if self._size >= 0:
-                prog_pct = self._seen_so_far / (self._size + 1) * 100
-                log.info("%s  progress %6d / %d MiB (%5.2f%%)", self._logprefix,
-                         prog_siz, (self._size + 512*1024) // (1024*1024), prog_pct)
-            else:
-                log.info("%s  progress %6d / -- MiB   --", self._logprefix, prog_siz)
-
 def _url_type(url):
     o = urlparse(url)
     if o.scheme == "s3":
@@ -102,7 +84,7 @@ def _url_type(url):
 def _nanuq_get(url, username="", password="", logprefix=""):
     """returns an open request object to a NANUQ download"""
     # nanuq has a non-standard form auth
-    log.info("%sdownloading %s (username=%s)", logprefix, url, username or "")
+    log.info("%s GET %s (username=%s)", logprefix, url, username or "")
 
     if username:
         r = requests.post(url, data={'j_username': username,
@@ -116,14 +98,22 @@ def _nanuq_get(url, username="", password="", logprefix=""):
         if oldest.status_code > 300 and oldest.status_code < 400:
             log.info("%s  redirected %s %s", logprefix, oldest.status_code, oldest.headers.get("location"))
             if "j_security_check" in oldest.headers.get("location", ""):
-                log.info("%s  download failed. bad credentials.", logprefix)
+                log.info("%sdownload failed. bad credentials.", logprefix)
                 raise ImportError("download failed")
 
-    content_length = r.headers.get('content-length', None)
-    if content_length:
-        content_length = int(content_length, 10)
+    if r.status_code >= 400:
+        log.info("%sdownload failed with code %s.", logprefix, r.status_code)
+        raise ImportError("download failed with code %s" % (r.status_code,))
 
-    log.info("%s  content-length %s", logprefix, content_length)
+    content_length = r.headers.get('content-length', None)
+    content_type = r.headers.get('content-type', None)
+
+    if not content_length:
+        # nanuq doesn't do chunked
+        raise ImportError("Expected content-length")
+
+    content_length = int(content_length, 10)
+    log.info("%s  content-length %s  content-type %s", logprefix, content_length, content_type)
     return (r.headers, r.raw)
 
 def _s3_get(url, logprefix="", **kwargs):
@@ -155,32 +145,80 @@ def _http_get(url, logprefix="", **kwargs):
     log.info("%s  content-Length %s  content-type %s", logprefix, content_length, r.headers.get('content-type', "n/a"))
     return (r.headers, r.raw)
 
-def _get(url, username="", password="", logprefix=""):
+def _get(url, creds=None, logprefix=""):
     """returns an open request handle to a file"""
     url_type = _url_type(url)
     if url_type == "s3":
         return _s3_get(url, logprefix=logprefix)
     elif url_type == "nanuq":
-        return _nanuq_get(url, username=username, password=username, logprefix=logprefix)
+        creds = creds or {}
+        username, password = creds.get('username', ""), creds.get('password', "")
+        return _nanuq_get(url, username=username, password=password, logprefix=logprefix)
     elif url_type == "http":
+        creds = creds or {}
+        username, password = creds.get('username', ""), creds.get('password', "")
         return _http_get(url, username=username, password=password, logprefix=logprefix)
     else:
         raise ImportError("Url has unsupported backend: %s" % (url,))
+
+def _s3_split_url(objecturl):
+    """splits an s3://foo/bar/baz url into bucketname, keyname: ("foo", "bar/baz")
+
+    the keyname may be empty
+    """
+    o = urlparse(objecturl)
+    if o.scheme != "s3":
+        raise ValueError("not an s3 url")
+
+    keyname = o.path
+    bucketname = o.netloc
+
+    # all URL paths start with /. strip it.
+    if keyname.startswith("/"):
+        keyname = keyname[1:]
+
+    return bucketname, keyname
+
+def _s3_delete(objecturl, logprefix=""):
+    bucketname, keyname = _s3_split_url(objecturl)
+    s3 = boto3.client('s3')
+    log.info("%s S3-DELETE bucket:%s key:%s", logprefix, bucketname, keyname)
+    return s3.delete_object(Bucket=bucketname, Key=keyname)
+
+def _s3_copy(srcurl, dsturl, content_type=None, meta=None, logprefix=""):
+    src_bucketname, src_keyname = _s3_split_url(srcurl)
+    dst_bucketname, dst_keyname = _s3_split_url(dsturl)
+
+    s3 = boto3.client('s3')
+    log.info("%s S3-COPY bucket:%s key:%s => bucket:%s key:%s", logprefix,
+             src_bucketname, src_keyname,
+             dst_bucketname, dst_keyname)
+    log.info("%s   content-type:%s meta:%s", logprefix, content_type, meta)
+
+    xtra = {}
+    if content_type:
+        xtra['ContentType'] = content_type
+    result = s3.copy_object(CopySource={'Bucket': src_bucketname, 'Key': src_keyname},
+                            Bucket=dst_bucketname, Key=dst_keyname, Metadata=meta or {}, **xtra)
+    log.debug("%s S3-COPY complete: bucket:%s key:%s etag:%s", logprefix, dst_bucketname, dst_keyname,
+              result['CopyObjectResult']['ETag'])
+    return result
 
 def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None, logprefix=""):
     """Store the input fileobject under key outputurl
 
     returns nothing.
     """
-    o = urlparse(outputurl)
-    bucketname = o.netloc
-    keyname = o.path
+    bucketname, keyname = _s3_split_url(outputurl)
+    if not keyname:
+        log.error("%sempty key given", logprefix)
+        raise ImportError("empty key given")
 
     meta = meta or {}
 
     s3 = boto3.client('s3')
     config = TransferConfig(use_threads=False, max_concurrency=1)
-    progress = ProgressPercentage(size=content_length, logprefix=logprefix)
+    progress = ProgressPercentage(size=content_length, logprefix=logprefix, logger=log)
 
     extra_args = {
         'ContentType': content_type or 'application/octet-stream',
@@ -194,143 +232,124 @@ def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None,
     if meta:
         extra_args['Metadata'].update(meta)
 
-    log.info("%sstarting upload: > bucket:%s key:%s extra:%s",
+    log.info("%s S3-PUT bucket:%s key:%s extra:%s",
               logprefix, bucketname, keyname, extra_args)
 
-    return s3.upload_fileobj(inputfp, bucketname, keyname,
-                             Config=config,
-                             ExtraArgs=extra_args,
-                             Callback=progress)
+    try:
+        return s3.upload_fileobj(inputfp, bucketname, keyname,
+                                 Config=config,
+                                 ExtraArgs=extra_args,
+                                 Callback=progress)
+    except ClientError as clierr:
+        log.error("%sclient error: %s", logprefix, str(clierr))
+        raise ImportError("error in upload to bucket:%s key:%s: %s" %
+                          (bucketname, keyname, clierr.response['Error']['Code']))
 
+def _digest_from_sum_url(digest_url, entry_name, creds=None, logprefix=""):
+    """
+    assumes the URL is a digest file (md5sum, sha1sum, etc).
+    reads the first 5 MBs. finds the entry, returns the digest
+    """
+    headers, inputfd = _get(digest_url, creds=creds, logprefix=logprefix)
+    text = inputfd.read(5*1024*1024).decode('utf-8')
+    inputfd.close()
 
-def _get_digest():
-    if digest_type:
-        digest_type = digest_type.upper()
-    if digest_type in ('MD5',):
-        md5_file = _do_download(tempdir, digest_url, creds,
-                                logprefix="%04d.md5 " % (serialno,))
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line: continue
+        try:
+            hexdigest, name = line.split(maxsplit=1)
+        except ValueError as ve:
+            log.error("%s bad sumfile format: %s", logprefix, line)
+            continue
 
-        expected_digest = _extract_digest_entry(md5_file, basename)
-        if not expected_digest:
-            raise Exception("cannot obtain expected digest for entry: %s" % (basename,))
-
-        digest_obj = hashlib.md5()
-
-    elif digest_type:
-        log.error("%04d digest type %s not supported", serialno, digest_type)
-        raise Exception("cannot download content")
-
-    log.info("%04d looking up content cache for %s:%s", serialno, digest_type, expected_digest)
-
-    cached_path = cache.get(digest_type, expected_digest)
-    if cached_path:
-        log.info("%04d download skipped. already cached. (%s)", serialno, cached_path)
-        return cached_path
-    else:
-        log.info("%04d no such content. downloading full file.", serialno)
-
-def _do_download(dl_dir, url, creds, digest_obj=None, logprefix=""):
-
-    raw_data = _nanuq_stream(url, creds.get('username', ''), creds.get('password', ''), logprefix=logprefix)
-
-    download_output = os.path.join(dl_dir, urllib.parse.unquote(os.path.basename(url)))
-
-    siz = 0
-    chksiz = 256*1024
-    last_update = 0
-    with open(download_output, "wb") as fd:
-        chunk = 'x'
-        while chunk:
-            chunk = raw_data.read(chksiz)
-            siz += len(chunk)
-            if digest_obj:
-                digest_obj.update(chunk)
-            fd.write(chunk)
-            if siz % (5*1024*1024) < chksiz:
-                now = time.time()
-                if last_update + 5.0 < now:
-                    last_update = now
-                    prog_siz = siz // (1024*1024)
-                    if content_length:
-                        prog_pct = siz / (content_length + 1) * 100
-                        log.info("%s  progress %6d / %d MiB (%5.2f%%)", logprefix,
-                                 prog_siz, (content_length + 512*1024) // (1024*1024), prog_pct)
-                    else:
-                        log.info("%s  progress %6d / -- MiB   --", logprefix, prog_siz)
-    log.info("%s  done. file %s written.", logprefix, download_output)
-
-    return download_output
-
-def _extract_digest_entry(digest_file, entry_name):
-    with open(digest_file, "r") as fd:
-        for line in fd:
-            line = line.strip()
-            if not line:
-                continue
-            dig, nam = line.split(maxsplit=1)
-            if nam == entry_name:
-                return dig
+        if name == entry_name:
+            return hexdigest
     return None
 
-def download_content(cache, work_dir, url, digest_type, digest_url, creds, serialno):
-    tempdir = tempfile.mkdtemp(prefix=".download-samples-", dir=work_dir)
-    basename = os.path.basename(url)
-    expected_digest = None
-    digest_obj = None
+def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, logprefix=""):
+    """do the work for one url/digesturl combo"""
+
+    logprefix=logprefix or ""
+    input_digests = {}
+
+    in_parsed = urlparse(inurl)
+    basename = os.path.split(in_parsed.path)[1]
+    for digest_type, digest_url in digests:
+        digest_type = digest_type.strip().lower()
+        log.info("%s fetching %s digest for name %s...", logprefix, digest_type, basename)
+        hexdigest = _digest_from_sum_url(digest_url, basename, creds=creds, logprefix=logprefix.rstrip() + "." + digest_type + " ")
+        if not hexdigest:
+            raise ImportError("cannot find %s digest for file %s" % (digest_type, basename))
+        log.info("%s found digest: %s %s", logprefix, digest_type, basename)
+        input_digests[digest_type] = hexdigest
+
+    out_parsed = urlparse(outurl)
+    if out_parsed.scheme != "s3":
+        log.error("%sbad output url %s. expected an s3:// url", logprefix, outurl)
+        raise ImportError("bad output url")
+    out_bucket = out_parsed.netloc
+
+    # if outurl is a key prefix (directory), append input basename to it.
+    if out_parsed.path.endswith("/"):
+        outurl = os.path.join(outurl, basename)
+
+    #
+    # todo check if outurl exists and has the expected sums.
+    # shortcircuit here
+    #
+
+    in_headers, in_fp = _get(inurl, creds=creds, logprefix=logprefix)
+    in_ct = in_headers.get('Content-Type')
+    in_cl = int(in_headers.get('Content-Length', -1), 10)
+
+
+    # supported by default
+    output_hashes = {'md5': True, 'sha1': True}
+    for algoname in input_digests:
+        # add anything that needs to be verified. carried from the input.
+        output_hashes[algoname] = True
+
+    pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
+
+    tmp_bucket = tmp_bucket or out_bucket
+    tmp_key = "reprod-data-import/%s" % (uuid.uuid4(),)
+    tmp_url = "s3://%s/%s" % (tmp_bucket, tmp_key)
+    try:
+        _s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+    finally:
+        pipe_fp.close()
 
     try:
-        if digest_type:
-            digest_type = digest_type.upper()
-        if digest_type in ('MD5',):
-            md5_file = _do_download(tempdir, digest_url, creds,
-                                    logprefix="%04d.md5 " % (serialno,))
-
-            expected_digest = _extract_digest_entry(md5_file, basename)
-            if not expected_digest:
-                raise Exception("cannot obtain expected digest for entry: %s" % (basename,))
-
-            digest_obj = hashlib.md5()
-
-        elif digest_type:
-            log.error("%04d digest type %s not supported", serialno, digest_type)
-            raise Exception("cannot download content")
-
-        log.info("%04d looking up content cache for %s:%s", serialno, digest_type, expected_digest)
-
-        cached_path = cache.get(digest_type, expected_digest)
-        if cached_path:
-            log.info("%04d download skipped. already cached. (%s)", serialno, cached_path)
-            return cached_path
-        else:
-            log.info("%04d no such content. downloading full file.", serialno)
-
-
-        # download full file
-        if not digest_type:
-            digest_obj = hashlib.md5()
-            digest_type = "md5"
-
-        full_file = _do_download(tempdir, url, creds, logprefix="%04d.data " % (serialno,), digest_obj=digest_obj)
-        computed_digest = digest_obj.hexdigest()
-
-        if expected_digest:
-            if computed_digest != expected_digest:
-                log.error("%04d download digest %s:%s does not match expected %s:%s",
-                          serialno, digest_type, computed_digest, digest_type, expected_digest)
-                raise Exception("download failed.")
+        xfer_digests = pipe_fp.hexdigests()
+        mismatches = []
+        for algo, expected_digest in input_digests.items():
+            if xfer_digests[algo] != expected_digest:
+                log.error("%s %s digest mismatch: got %s but expected %s", logprefix, algo, xfer_digests[algo], expected_digest)
+                raise ImportError("%s digest mismatch: got %s but expected %s" % (algo, xfer_digests[algo], expected_digest))
             else:
-                log.info("%04d digest %s:%s matches", serialno, digest_type, expected_digest)
+                log.debug("%s %s digest match: %s", logprefix, algo, expected_digest)
 
-        cached_path = cache.put(full_file, digest_type, computed_digest)
-        return cached_path
+        # store digests in final location metadata
+        meta = {}
+        for algo, digest in xfer_digests.items():
+            meta[DIGEST_HEADER + algo.lower()] = digest.strip()
+        # mark which digests were verified on import
+        import_checks = ",".join(input_digests.keys())
+        meta[META_PREFIX + "import-digests"] = import_checks
+
+        # copy to final location
+        copy_result = _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, logprefix=logprefix)
+        return {"input": inurl,
+                "output": outurl,
+                "Content-Type": in_ct,
+                "Content-Length": in_cl,
+                "digests": pipe_fp.hexdigests()}
+
     finally:
-        shutil.rmtree(tempdir, ignore_errors=True)
+        _s3_delete(tmp_url, logprefix=logprefix)
 
-
-def _handle_request_full(inurl, outurl, digests):
-    pass
-
-def handle_request(request):
+def handle_request(request, creds=None, tmp_bucket=None, logprefix=""):
     """
     returns the result of handling one request
 
@@ -345,36 +364,51 @@ def handle_request(request):
         if digest_typ not in ("md5",):
             return {"error": "unrecognized digest type: %s" % (digest_typ,)}
     try:
-        _handle_request_full(input_url, output_url, digests)
+        return _handle_request_full(input_url, output_url, input_digests, creds=creds, tmp_bucket=tmp_bucket, logprefix=logprefix)
     except ImportError as ie:
-        return {"error": ie.message}
+        return {"input": input_url, "output": output_url, "error": str(ie)}
 
 def lambda_handler(event, context):
+    """lambda entry point"""
     requests = event.get("requests", [])
 
     errors = []
     error_count = 0
 
-    results = [ handle_request(req) for req in requests ]
+    creds = {}
+    creds['username'] = os.environ.get('USERNAME', '')
+    creds['password'] = os.environ.get('PASSWORD', '')
+    tmp_bucket = os.environ.get('TMPBUCKET', '')
+
+    results = [ handle_request(req, creds=creds, tmp_bucket=tmp_bucket, logprefix="%03d" % i) for i, req in enumerate(requests) ]
     error_count = len([r for r in results if "error" in r])
-    return results
+    return {
+        'error_count': error_count,
+        'results': results
+    }
 
+def main_handler():
+    """do the work. CLI"""
 
-if __name__ == "__main__":
     import argparse
     import yaml
 
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument("url", metavar="INURL", help="url to input file")
-    parser.add_argument("--md5url", metavar="MD5URL", help="url of md5sum file for the input. optional") 
     parser.add_argument("outputurl", metavar="OUTPUTURL", help="target name in s3. e.g. s3://my-bucket/foo.txt")
-    parser.add_argument("--workdir", metavar="WORKDIR", type=str, default="/tmp/",
-                        help="working directory")
+
+    parser.add_argument("--md5url", metavar="MD5URL", help="url of md5sum file for the input. optional")
+    parser.add_argument("--tmpbucket", metavar="TMPBUCKET", help="bucket name in which to store temporary files. optional", default='')
     parser.add_argument("--creds", metavar="CREDSFILE", type=str, default=None,
                         help="credentials file (yaml) with username and password key")
 
     args = parser.parse_args()
+
+    creds = {}
+    creds['username'] = os.environ.get('USERNAME', '')
+    creds['password'] = os.environ.get('PASSWORD', '')
+    tmp_bucket = os.environ.get('TMPBUCKET', '')
 
     if args.creds:
         with open(args.creds, "r") as stream:
@@ -385,12 +419,32 @@ if __name__ == "__main__":
             except yaml.YAMLError as exc:
                 raise
     else:
-        username = ''
-        password = ''
+        creds=None
 
-    headers, inputfd = _get(args.url, username=username, password=password, logprefix="[main] ")
-    result = _s3_put(inputfd, args.outputurl,
-                     content_length=int(headers.get('content-length', -1), 10),
-                     content_type=headers.get('content-type'),
-                     logprefix="[main] ")
+    digests = []
+
+    if args.tmpbucket:
+        tmp_bucket = args.tmpbucket
+
+    if args.md5url:
+        digests.append(("md5", args.md5url))
+
+    request = {
+        "input": args.url,
+        "output": args.outputurl,
+        "digests": digests
+    }
+
+    requests = [request]
+    results = [ handle_request(req, creds=creds, tmp_bucket=tmp_bucket, logprefix="%03d" % i) for i, req in enumerate(requests) ]
+    error_count = len([r for r in results if "error" in r])
+
+    json.dump({"results": results, "error_count": error_count}, sys.stdout, sort_keys=True, indent=4, separators=(',', ': '))
+    if error_count > 0:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main_handler()
+    sys.exit(0)
+
 
