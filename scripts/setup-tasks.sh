@@ -2,7 +2,7 @@
 
 HERE="$(readlink -f $(dirname "$0"))"
 
-set -ex
+set -Eex
 
 OUTFILE="${OUTFILE:-cluster-settings.json}"
 
@@ -36,18 +36,24 @@ create_cluster_response=$(aws ecs create-cluster --cluster-name 'reprod')
 cluster_name=$("$HERE"/read_json_key cluster.clusterName <<<"$create_cluster_response")
 cluster_arn=$("$HERE"/read_json_key cluster.clusterArn <<<"$create_cluster_response")
 
-echo \
+function output_settings ()
+{
+
+    echo \
 "{
 \"cluster_name\": \"${cluster_name}\",
 \"cluster_arn\": \"${cluster_arn}\"
-}" | tee "${OUTFILE}"
+}"
+}
+
+output_settings | tee "${OUTFILE}"
 
 # create test task definition for align container
 
 function placeholders () {
     local subst
     local region=$(aws configure get region)
-    osed "s@{REGION}@$(aws configure get region)@g"
+    sed "s@{REGION}@$(aws configure get region)@g"
 }
 
 # This must be done for each repo
