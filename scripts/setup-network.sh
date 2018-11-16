@@ -31,6 +31,14 @@ function json_key ()
     "$HERE"/read_json_key "$1"
 }
 
+function output_settings () {
+echo "{
+\"vpc_id\": \"${vpc_id}\",
+\"subnet_id\": \"${subnet_id}\",
+\"security_group_id\": \"${secgroup_id}\"
+}"
+}
+
 if [[ -f "$OUTFILE" ]]; then
     echo  "output file $OUTFILE already exists" >&2
     exit 1
@@ -140,15 +148,25 @@ if [[ -z "$vpc_id" ]]; then
 			     --subnet-id "$subnet_id" \
 			     --route-table-id "$route_table_id"
 		      )
-    echo \
-"{
-\"vpc_id\": \"${vpc_id}\",
-\"subnet_id\": \"${subnet_id}\",
-\"security_group_id\": \"${secgroup_id}\"
-}" | tee "${OUTFILE}"
+
+    output_settings | tee "${OUTFILE}"
 
     echo "See file network-settings.json to see ids of new network." >&2
 else
-    echo "vpc already exists. use aws ec2 delete-vpc --vpc-id $vpc_id to remove." >&2
+    :
+    : networks already created. fetch existing information
+    :
+    subnet_id=$(aws ec2 describe-subnets --filters Name=tag:Name,Values="$SUBNETNAME" Name=vpc-id,Values="$vpc_id" | \
+		       json_key Subnets.0.SubnetId)
+
+    secgroup_id=$(aws ec2 describe-security-groups --filters Name=group-name,Values="$SECGROUPNAME" Name=vpc-id,Values="$vpc_id" | \
+			 json_key SecurityGroups.0.GroupId)
+
+    { set +x
+      echo "vpc already exists. if the current network settings in place are correct," >&2
+      echo "they can be reused by writing the following to network-settings.json:" >&2
+      echo "(alternatively the network information can be wiped with \`aws ec2 delete-vpc --vpc-id $vpc_id\`, or via aws console)" >&2
+    }
+    output_settings
 fi
 
