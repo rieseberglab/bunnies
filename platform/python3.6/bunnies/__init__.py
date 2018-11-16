@@ -53,11 +53,15 @@ def _load_config():
 
     for name, target in search_for:
         doc = None
-        with _find_file(startdir, target) as infd:
+        infd = None
+        try:
+            infd = _find_file(startdir, target)
             if infd is None:
                 raise exc.BunniesException("couldn't load %s file %s" % (name, target))
             doc = json.load(infd)
             settings.update(doc)
+        finally:
+            if infd: infd.close()
 
     _load_config.cache = settings
     return settings
