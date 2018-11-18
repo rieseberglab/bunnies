@@ -133,8 +133,8 @@ setup(
     # projects.
     extras_require={  # Optional
         'dev': ['pylint'],
-        'lambda': [],
-        'build': ['requests', 'boto3', 'awscli']
+        'lambda': ['requests'],
+        'build': ['requests', 'boto3==1.9.35', 'awscli']
     },
 
     # If there are data files included in your packages that need to be
