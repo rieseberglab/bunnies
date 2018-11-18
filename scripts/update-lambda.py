@@ -90,7 +90,7 @@ def main():
 
         # make temp dir to store platform files
         platform_tmpdir = tempfile.mkdtemp(suffix="_platform", prefix="reprod_", dir=args.workdir)
-        
+
         # install platform tooling in lambda
         log.debug("installing platform module in lambda build directory %s", platform_tmpdir)
         try:
@@ -124,7 +124,6 @@ def main():
     lambda_cli = boto3.client('lambda')
     iam_cli = boto3.resource('iam')
 
-    
     with open(os.path.join(args.lambdadir, '.metadata.json'), "r") as metafd:
         metadata = json.load(metafd)
 
@@ -134,6 +133,7 @@ def main():
             rolename = definition['Role'] = definition['Role']
             role = iam_cli.Role(rolename)
             role.load()
+
             updated['Role'] = role.arn
             updated['Code'] = {'ZipFile': zipdata}
 
@@ -144,13 +144,16 @@ def main():
             except ClientError as err:
                 if err.response['Error']['Code'] == 'ResourceConflictException':
                     log.info("Creation failed: %s", err)
+                    now_func = lambda_cli.get_function_configuration(FunctionName=lambda_name)
+                    current_rev = now_func['RevisionId']
                     log.info("Lambda %s already exists. updating code...", lambda_name)
                     code_update = lambda_cli.update_function_code(**{
                         "FunctionName": lambda_name,
-                        "ZipFile": zipdata
+                        "ZipFile": zipdata,
+                        "RevisionId": current_rev
                     })
                     del updated['Code']
-
+                    updated['RevisionId'] = code_update['RevisionId']
                     log.info("Lambda %s already exists. updating config...", lambda_name)
                     config_update = lambda_cli.update_function_configuration(**updated)
                     lambdas.append(config_update)
@@ -160,5 +163,3 @@ def main():
 if __name__ == "__main__":
     main()
     sys.exit(0)
-    
-    
