@@ -1,0 +1,18 @@
+[
+    {
+	"FunctionName": "data-import",
+	"Runtime": "python3.6",
+	"Handler": "main.lambda_handler",
+	"Description": "imports data from the web into the reprod platform",
+	"Timeout": 900,
+	"Role": "reprod-lambda-role",
+	"Environment": {
+	    "Variables": {
+		"TMPBUCKET": "reprod-temp-bucket",
+		"EXAMPLE_URL1_MD5": "https://genomequebec.mcgill.ca/nanuqMPS/readSetMd5Download/id/450120/type/READ_SET_FASTQ/filename/HI.4663.002.Index_15.664647_GIG_R1.fastq.gz.md5",
+		"EXAMPLE_URL1": "https://genomequebec.mcgill.ca/nanuqMPS/fileDownload/id/450120/type/READ_SET_FASTQ/filename/HI.4663.002.Index_15.664647_GIG_R1.fastq.gz"
+	    }
+	},
+	"MemorySize": 128
+    }
+]
