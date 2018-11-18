@@ -54,6 +54,7 @@ DIGEST_HEADER = META_PREFIX + "digest-" # + algo.lowercase()
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
+
     root = logging.getLogger(__name__)
     root.setLevel(loglevel)
     ch = logging.StreamHandler(sys.stderr)
@@ -61,6 +62,7 @@ def setup_logging(loglevel=logging.INFO):
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     root.addHandler(ch)
+    root.propagate = False
 
 setup_logging(logging.DEBUG)
 
