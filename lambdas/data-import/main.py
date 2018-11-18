@@ -19,7 +19,7 @@
 #     "requests": [
 #         {
 #             "input": "http://...",
-#             "digests": [("md5": "http://...")],
+#             "digests": [["md5", "http://..."]],
 #             "output": "s3://..."
 #         }
 #     ]
@@ -34,22 +34,31 @@
 # }
 
 
-import boto3
+import boto3, botocore
 from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 
 import json
-import os, sys
+import os, sys, io
 import requests
 import logging
 import uuid
+import hashlib
+import base64
+import time
 from urllib.parse import urlparse
-from helpers import ProgressPercentage, HashingReader
 
 import bunnies
 
+from helpers import ProgressPercentage, HashingReader, yield_in_chunks, hex2b64
+
+MB = 1024 * 1024
+MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
+UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 16*MB
+SIMPLE_STREAM_ENABLED = os.environ.get("SIMPLE_STREAM_ENABLED", True) not in [False, "false", "False", "0", "N", "n", "no"]
+
 # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
-META_PREFIX = "x-amz-meta-"
+META_PREFIX = "" # in boto you don't give x-amz-meta-
 DIGEST_HEADER = META_PREFIX + "digest-" # + algo.lowercase()
 
 def setup_logging(loglevel=logging.INFO):
@@ -65,8 +74,9 @@ def setup_logging(loglevel=logging.INFO):
     root.propagate = False
 
 setup_logging(logging.DEBUG)
-
 log = logging.getLogger(__name__)
+
+log.info("Running boto3:%s botocore:%s", boto3.__version__, botocore.__version__)
 
 class ImportError(Exception):
     pass
@@ -133,7 +143,7 @@ def _s3_get(url, logprefix="", **kwargs):
 
 def _http_get(url, logprefix="", **kwargs):
     """http or https GET"""
-    log.info("%sdownloading %s", logprefix, url)
+    log.info("%s downloading %s", logprefix, url)
 
     r = requests.get(url, stream=True)
 
@@ -200,11 +210,144 @@ def _s3_copy(srcurl, dsturl, content_type=None, meta=None, logprefix=""):
     xtra = {}
     if content_type:
         xtra['ContentType'] = content_type
+    if meta:
+        xtra['Metadata'] = meta
+        xtra['MetadataDirective'] = 'REPLACE'
     result = s3.copy_object(CopySource={'Bucket': src_bucketname, 'Key': src_keyname},
-                            Bucket=dst_bucketname, Key=dst_keyname, Metadata=meta or {}, **xtra)
+                            Bucket=dst_bucketname, Key=dst_keyname, **xtra)
     log.debug("%s S3-COPY complete: bucket:%s key:%s etag:%s", logprefix, dst_bucketname, dst_keyname,
               result['CopyObjectResult']['ETag'])
     return result
+
+def _s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_length=None, content_md5=None, meta=None, logprefix=""):
+    """
+    Upload the inputfile (stream) using a single PUT operation
+
+    you must specify content_length, and content_md5 (hexdigest)
+    """
+    bucketname, keyname = _s3_split_url(outputurl)
+    if not keyname:
+        log.error("%s empty key given", logprefix)
+        raise ImportError("empty key given")
+
+
+    if content_length < 0 or content_length is None or content_length > MAX_SINGLE_UPLOAD_SIZE:
+        raise ImportError("Content length must be known and between 5MiB and 5GiB")
+
+    if content_md5 is None:
+        raise ImportError("Content-MD5 must be known to do simple streaming uploads.")
+
+    meta = meta or {}
+
+    s3 = boto3.client('s3')
+
+    base64_md5 = hex2b64(content_md5)
+
+    extra_args = {
+        'ContentType': content_type or 'application/octet-stream',
+        'ContentMD5': base64_md5,
+        'ContentLength': content_length,
+        'Metadata': {'foo':'blah'}
+    }
+
+    if meta:
+        extra_args['Metadata'].update(meta)
+
+    log.info("%s S3-PutObject bucket:%s key:%s extra:%s",
+              logprefix, bucketname, keyname, extra_args)
+
+    try:
+        completed = s3.put_object(Bucket=bucketname, Key=keyname,
+                                  Body=inputfp,
+                                  **extra_args)
+        log.info("%s completed simple streaming upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname, completed['ETag'])
+        return completed
+
+    except ClientError as clierr:
+        log.error("%s client error: %s", logprefix, str(clierr))
+        raise ImportError("error in upload to bucket:%s key:%s: %s" %
+                          (bucketname, keyname, clierr.response['Error']['Code']))
+
+def _s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None, logprefix=""):
+    """
+    Upload the inputfile using a multipart approach.
+    """
+    bucketname, keyname = _s3_split_url(outputurl)
+    if not keyname:
+        log.error("%s empty key given", logprefix)
+        raise ImportError("empty key given")
+
+    meta = meta or {}
+
+    s3 = boto3.client('s3')
+    progress = ProgressPercentage(size=content_length, logprefix=logprefix, logger=log)
+
+    extra_args = {
+        'ContentType': content_type or 'application/octet-stream',
+        'Metadata': {}
+    }
+
+    if meta:
+        extra_args['Metadata'].update(meta)
+
+    log.info("%s S3-PutObject multipart bucket:%s key:%s extra:%s",
+              logprefix, bucketname, keyname, extra_args)
+
+    mpart = None
+    try:
+        mpart = s3.create_multipart_upload(Bucket=bucketname, Key=keyname,
+                                           **extra_args)
+        parts = []
+        partnumber = 0
+        md5s = b''
+        progress(0)
+
+        chunk_iter = yield_in_chunks(inputfp, UPLOAD_CHUNK_SIZE)
+        chunkfp = None
+
+        for chunk in chunk_iter:
+            partnumber += 1
+
+            chunklen = len(chunk)
+            chunkdigest = hashlib.md5(chunk).digest()
+            chunkfp = io.BytesIO(chunk)
+            chunk = None
+
+            base64_md5 = base64.b64encode(chunkdigest).decode('ascii')
+            part_res = s3.upload_part(Body=chunkfp, Bucket=bucketname, Key=keyname,
+                                      ContentLength=chunklen,
+                                      ContentMD5=base64_md5,
+                                      PartNumber=partnumber,
+                                      UploadId=mpart['UploadId'])
+            chunkfp.close()
+            chunkfp = None
+            parts.append((partnumber, part_res['ETag']))
+
+            progress(chunklen)
+        del chunk_iter
+        #objgraph.show_growth()
+        #objgraph.show_most_common_types(limit=20)
+        # finish it
+        log.info("%s completing multipart upload bucket:%s key:%s ...", logprefix, bucketname, keyname)
+        completed = s3.complete_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'],
+                                                 MultipartUpload={
+                                                     'Parts': [ {'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts ]
+                                                 })
+        mpart = None
+        log.info("%s completed multipart upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname, completed['ETag'])
+        return completed
+
+    except ClientError as clierr:
+        log.error("%s client error: %s", logprefix, str(clierr))
+        raise ImportError("error in upload to bucket:%s key:%s: %s" %
+                          (bucketname, keyname, clierr.response['Error']['Code']))
+    finally:
+        if mpart:
+            try:
+                s3.abort_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'])
+                log.info("%s multipart upload aborted.", logprefix)
+            except Exception as exc:
+                log.error("%s could not abort multipart upload:", logprefix, exc_info=exc)
 
 def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None, logprefix=""):
     """Store the input fileobject under key outputurl
@@ -213,7 +356,7 @@ def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None,
     """
     bucketname, keyname = _s3_split_url(outputurl)
     if not keyname:
-        log.error("%sempty key given", logprefix)
+        log.error("%s empty key given", logprefix)
         raise ImportError("empty key given")
 
     meta = meta or {}
@@ -234,14 +377,14 @@ def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None,
     if meta:
         extra_args['Metadata'].update(meta)
 
-    log.info("%s S3-PUT bucket:%s key:%s extra:%s",
+    log.info("%s S3-Put (transfermanager) bucket:%s key:%s extra:%s",
               logprefix, bucketname, keyname, extra_args)
 
     try:
-        return s3.upload_fileobj(inputfp, bucketname, keyname,
-                                 Config=config,
-                                 ExtraArgs=extra_args,
-                                 Callback=progress)
+        s3.upload_fileobj(inputfp, bucketname, keyname,
+                          Config=config,
+                          ExtraArgs=extra_args,
+                          Callback=progress)
     except ClientError as clierr:
         log.error("%sclient error: %s", logprefix, str(clierr))
         raise ImportError("error in upload to bucket:%s key:%s: %s" %
@@ -318,9 +461,26 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
     tmp_key = "reprod-data-import/%s" % (uuid.uuid4(),)
     tmp_url = "s3://%s/%s" % (tmp_bucket, tmp_key)
     try:
-        _s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+        start_time = time.time()
+        if SIMPLE_STREAM_ENABLED and in_cl >= 0 and in_cl <= MAX_SINGLE_UPLOAD_SIZE and input_digests['md5']:
+            pipe_fp.progress_callback = ProgressPercentage(size=in_cl, logprefix=logprefix, logger=log)
+            upload_result = _s3_streaming_put_simple(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
+                                                     content_md5=input_digests['md5'], logprefix=logprefix)
+        else:
+            pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
+            upload_result = _s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+
+        # from file
+        #_s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+        delta_t = time.time() - start_time
+        cl = pipe_fp.tell()
+        log.info("%s PUT completed in %8.3f seconds. (%8.3f MB/s)", logprefix,
+                 delta_t, cl / (1024*1024*(delta_t+0.00001)))
+
+        log.debug("%s new file result: %s", logprefix, upload_result)
+
     finally:
-        pipe_fp.close()
+        if pipe_fp: pipe_fp.close()
 
     try:
         xfer_digests = pipe_fp.hexdigests()
@@ -330,7 +490,7 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
                 log.error("%s %s digest mismatch: got %s but expected %s", logprefix, algo, xfer_digests[algo], expected_digest)
                 raise ImportError("%s digest mismatch: got %s but expected %s" % (algo, xfer_digests[algo], expected_digest))
             else:
-                log.debug("%s %s digest match: %s", logprefix, algo, expected_digest)
+                log.info("%s %s digest match: %s", logprefix, algo, expected_digest)
 
         # store digests in final location metadata
         meta = {}
