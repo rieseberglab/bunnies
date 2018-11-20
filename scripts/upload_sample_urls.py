@@ -41,7 +41,7 @@ def do_request(req):
     code, response = lambdas.invoke_sync(DATA_IMPORT_LAMBDA, Payload=req)
     data = response['Payload'].read()
     if code != 0:
-        raise Exception("The lambda failed: %s" + str(response))
+        raise Exception("The lambda failed.")
     return json.loads(data.decode('ascii'))
 
 def main_handler():
@@ -111,7 +111,6 @@ def main_handler():
     futures = []
     log.info("Submitting %d requests with %d threads...", len(requests), args.threads)
 
-    exception_count = 0
     upload_error_count = 0
     results = {}
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
@@ -123,20 +122,18 @@ def main_handler():
                 data = future.result()
                 results[lineno] = data
             except Exception as exc:
-                log.error("request on line %d generated an exception: %s" % (lineno, exc), exc_info=exc)
-                exception_error_count += 1
-                results[lineno] = {"error": str(exc)}
+                log.error("request on line %d generated an exception: %s", lineno, exc, exc_info=exc)
+                results[lineno] = {'error_count': 1, 'results': [{"error": str(exc)}]}
 
     upload_results = []
     for lineno in sorted(results.keys()):
         result = results[lineno]
-        if result['error_count'] > 0:
+        if result.get('error_count', 0) > 0:
             upload_error_count += result['error_count']
         upload_results += result['results']
 
     json.dump(upload_results, sys.stdout, sort_keys=True, indent=4, separators=(",", ": "))
-
-    if exception_count > 0 or upload_error_count > 0:
+    if upload_error_count > 0:
         return 1
     return 0
 
