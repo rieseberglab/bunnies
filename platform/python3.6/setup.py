@@ -133,7 +133,7 @@ setup(
     # projects.
     extras_require={  # Optional
         'dev': ['pylint'],
-        'lambda': ['requests'],
+        'lambda': ['requests', 'boto3==1.9.35'],
         'build': ['requests', 'boto3==1.9.35', 'awscli']
     },
 
