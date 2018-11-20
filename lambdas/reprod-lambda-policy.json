@@ -24,6 +24,7 @@
             "Resource": [
                 "arn:aws:s3:::reprod-temp-bucket/*",
                 "arn:aws:s3:::reprod-test-bucket/*",
+                "arn:aws:s3:::*/*",
                 "arn:aws:logs:*:*:*"
             ]
         },
