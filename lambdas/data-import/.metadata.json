@@ -14,5 +14,19 @@
 	    }
 	},
 	"MemorySize": 128
+    },
+    {
+	"FunctionName": "data-rehash",
+	"Runtime": "python3.6",
+	"Handler": "rehash.lambda_handler",
+	"Description": "recompute hashes on file and move to final location if hashes match",
+	"Timeout": 900,
+	"Role": "reprod-lambda-role",
+	"Environment": {
+	    "Variables": {
+		"TMPBUCKET": "reprod-temp-bucket"
+	    }
+	},
+	"MemorySize": 128
     }
 ]
