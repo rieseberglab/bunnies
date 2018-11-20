@@ -22,7 +22,7 @@ def get_lambda_client():
     if get_lambda_client.client:
         return get_lambda_client.client
     session = boto3.session.Session()
-    lambda_client = session.client('lambda', config=botocore.config.Config(read_timeout=910))
+    lambda_client = session.client('lambda', config=botocore.config.Config(read_timeout=910, retries={'max_attempts': 0}))
     get_lambda_client.client = lambda_client
     return lambda_client
 
