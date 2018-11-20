@@ -55,7 +55,8 @@ from helpers import ProgressPercentage, HashingReader, yield_in_chunks, hex2b64
 MB = 1024 * 1024
 MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
 UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 16*MB
-SIMPLE_STREAM_ENABLED = os.environ.get("SIMPLE_STREAM_ENABLED", True) not in [False, "false", "False", "0", "N", "n", "no"]
+SIMPLE_STREAM_ENABLED = os.environ.get("SIMPLE_STREAM_ENABLED", False) not in [False, "false", "False", "0", "N", "n", "no"]
+DEFAULT_OUTPUT_HASHES = {"md5": True}#, "sha1": True}
 
 # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
 META_PREFIX = "" # in boto you don't give x-amz-meta-
@@ -213,6 +214,7 @@ def _s3_copy(srcurl, dsturl, content_type=None, meta=None, logprefix=""):
     if meta:
         xtra['Metadata'] = meta
         xtra['MetadataDirective'] = 'REPLACE'
+    boto3.set_stream_logger('', logging.DEBUG)
     result = s3.copy_object(CopySource={'Bucket': src_bucketname, 'Key': src_keyname},
                             Bucket=dst_bucketname, Key=dst_keyname, **xtra)
     log.debug("%s S3-COPY complete: bucket:%s key:%s etag:%s", logprefix, dst_bucketname, dst_keyname,
@@ -450,11 +452,13 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
 
 
     # supported by default
-    output_hashes = {'md5': True, 'sha1': True}
+    output_hashes = dict(DEFAULT_OUTPUT_HASHES)
     for algoname in input_digests:
         # add anything that needs to be verified. carried from the input.
         output_hashes[algoname] = True
 
+    log.info("%s Request inurl:%s outurl:%s", logprefix, inurl, outurl)
+    log.info("%s Computing %s hash(es) while streaming.", logprefix, ",".join([k for k in output_hashes]))
     pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
 
     tmp_bucket = tmp_bucket or out_bucket
@@ -467,11 +471,11 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
             upload_result = _s3_streaming_put_simple(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
                                                      content_md5=input_digests['md5'], logprefix=logprefix)
         else:
-            pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
             upload_result = _s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
 
-        # from file
-        #_s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+        # # from file
+        # _s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+
         delta_t = time.time() - start_time
         cl = pipe_fp.tell()
         log.info("%s PUT completed in %8.3f seconds. (%8.3f MB/s)", logprefix,
@@ -484,7 +488,6 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
 
     try:
         xfer_digests = pipe_fp.hexdigests()
-        mismatches = []
         for algo, expected_digest in input_digests.items():
             if xfer_digests[algo] != expected_digest:
                 log.error("%s %s digest mismatch: got %s but expected %s", logprefix, algo, xfer_digests[algo], expected_digest)
@@ -501,7 +504,7 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
         meta[META_PREFIX + "import-digests"] = import_checks
 
         # copy to final location
-        copy_result = _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, logprefix=logprefix)
+        _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, logprefix=logprefix)
         return {"input": inurl,
                 "output": outurl,
                 "Content-Type": in_ct,
