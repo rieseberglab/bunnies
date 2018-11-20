@@ -19,6 +19,7 @@ import shutil
 import boto3
 from botocore.exceptions import ClientError
 
+import bunnies.utils
 
 EXCLUDES = [".metadata.json"]
 EXCLUDE_PATTERNS = ["*~"]
@@ -66,6 +67,14 @@ def zip_lambda_dir(ziproot, zipfd):
         for basename in files: _add_entry(root, basename)
         for basename in dirs: _add_entry(root, basename)
 
+
+def get_env_override(lambdadir):
+    envfd = bunnies.utils.find_config_file(lambdadir, ".env.override.json")
+    if not envfd:
+        return {}
+    envjson = json.load(envfd)
+    envfd.close()
+    return envjson
 
 def main():
     setup_logging()
@@ -127,9 +136,12 @@ def main():
     with open(os.path.join(args.lambdadir, '.metadata.json'), "r") as metafd:
         metadata = json.load(metafd)
 
+        env_override = get_env_override(args.lambdadir)
+        
         lambdas = []
         for definition in metadata:
             updated = dict(definition)
+
             rolename = definition['Role'] = definition['Role']
             role = iam_cli.Role(rolename)
             role.load()
@@ -138,6 +150,12 @@ def main():
             updated['Code'] = {'ZipFile': zipdata}
 
             lambda_name = updated['FunctionName']
+            lambda_env_vars = updated.setdefault('Environment', {}).setdefault("Variables", {})
+            lambda_env_override = env_override.get(lambda_name, {}).get("Environment", {})
+            for env_var, env_val in lambda_env_override.get('Variables', {}).items():
+                log.info("Overriding %s Environment Variable %s...", lambda_name, env_var)
+                lambda_env_vars[env_var] = env_val
+
             try:
                 log.info("Creating lambda %s...", lambda_name)
                 lambdas.append(lambda_cli.create_function(**updated))

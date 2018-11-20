@@ -9,6 +9,7 @@ import logging
 import errno
 
 from . import exc
+from . import utils
 
 logger = logging.getLogger(__package__)
 
@@ -26,22 +27,6 @@ def _load_config():
     if _load_config.cache:
         return _load_config.cache
 
-    def _find_file(startdir, filname):
-        """recurse in folder and parents to find filname and open it"""
-        parent = os.path.dirname(startdir)
-        try:
-            tryname = os.path.join(startdir, filname)
-            fd = open(os.path.join(startdir, filname), "r")
-            return fd
-        except IOError as ioe:
-            if ioe.errno != errno.ENOENT:
-                raise
-        # reached /
-        if parent == startdir:
-            return None
-
-        return _find_file(parent, filname)
-
 
     startdir = os.path.dirname(os.path.realpath(__file__))
     settings = {}
@@ -55,7 +40,7 @@ def _load_config():
         doc = None
         infd = None
         try:
-            infd = _find_file(startdir, target)
+            infd = utils.find_config_file(startdir, target)
             if infd is None:
                 raise exc.BunniesException("couldn't load %s file %s" % (name, target))
             doc = json.load(infd)
