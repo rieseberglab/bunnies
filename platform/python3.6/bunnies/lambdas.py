@@ -6,13 +6,27 @@
 
 import sys
 import os, os.path
+
 import boto3
+import botocore.config
+
 import json
 import logging
 import base64
 import io
 from . import setup_logging
 log = logging.getLogger(__package__)
+
+def get_lambda_client():
+    """return a client that can wait more than 60 seconds for the result of a lambda"""
+    if get_lambda_client.client:
+        return get_lambda_client.client
+    session = boto3.session.Session()
+    lambda_client = session.client('lambda', config=botocore.config.Config(read_timeout=910))
+    get_lambda_client.client = lambda_client
+    return lambda_client
+
+get_lambda_client.client = None
 
 def default_context():
     """See ClientContext syntax here: https://docs.aws.amazon.com/mobileanalytics/latest/ug/PutEvents.html"""
@@ -53,7 +67,7 @@ def invoke_sync(function_name, client_context=None, Payload=None, LogType='Tail'
     context_b64 = json.dumps(obj_context)
     context_b64 = base64.b64encode(context_b64.encode('ascii')).decode('ascii')
 
-    l = boto3.client('lambda')
+    l = get_lambda_client()
 
     if isinstance(Payload, dict):
         Payload=json.dumps(Payload, separators=(',',':')).encode('ascii')
