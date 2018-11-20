@@ -124,7 +124,7 @@ def main_handler():
                 results[lineno] = data
             except Exception as exc:
                 log.error("request on line %d generated an exception: %s" % (lineno, exc), exc_info=exc)
-                error_count += 1
+                exception_error_count += 1
                 results[lineno] = {"error": str(exc)}
 
     upload_results = []
@@ -136,9 +136,9 @@ def main_handler():
 
     json.dump(upload_results, sys.stdout, sort_keys=True, indent=4, separators=(",", ": "))
 
-    if exception_count > 0 :
+    if exception_count > 0 or upload_error_count > 0:
         return 1
-
+    return 0
 
 if __name__ == "__main__":
     setup_logging(logging.DEBUG)
