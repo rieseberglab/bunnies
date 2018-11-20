@@ -2,7 +2,7 @@
 #
 # This module code is available in lambdas and container tasks
 #
-
+import sys
 import os, os.path
 import json
 import logging
@@ -10,7 +10,7 @@ import errno
 
 from . import exc
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__package__)
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
@@ -67,10 +67,5 @@ def _load_config():
     return settings
 _load_config.cache = None
 
-
 config = _load_config()
 
-
-# main command line executable
-def main():
-    pass
