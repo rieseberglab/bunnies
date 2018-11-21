@@ -465,7 +465,6 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
 
     log.info("%s Request inurl:%s outurl:%s", logprefix, inurl, outurl)
     log.info("%s Computing %s hash(es) while streaming.", logprefix, ",".join([k for k in output_hashes]))
-    pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
 
     tmp_bucket = tmp_bucket or out_bucket
     tmp_key = "reprod-data-import/%s" % (uuid.uuid4(),)
@@ -473,48 +472,67 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
     try:
         start_time = time.time()
         if SIMPLE_STREAM_ENABLED and in_cl >= 0 and in_cl <= MAX_SINGLE_UPLOAD_SIZE and input_digests['md5']:
+            pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
             pipe_fp.progress_callback = ProgressPercentage(size=in_cl, logprefix=logprefix, logger=log)
             upload_result = _s3_streaming_put_simple(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
                                                      content_md5=input_digests['md5'], logprefix=logprefix)
         else:
+            pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
             upload_result = _s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
 
         # # from file
+        # pipe_fp = HashingReader(in_fp, algorithms=())#output_hashes.keys())
         # _s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
 
         delta_t = time.time() - start_time
-        cl = pipe_fp.tell()
+        xfer_cl = pipe_fp.tell()
         log.info("%s PUT completed in %8.3f seconds. (%8.3f MB/s)", logprefix,
-                 delta_t, cl / (1024*1024*(delta_t+0.00001)))
+                 delta_t, xfer_cl / (1024*1024*(delta_t+0.00001)))
 
-        log.debug("%s new file result: %s", logprefix, upload_result)
-
+        #log.debug("%s new file result: %s", logprefix, upload_result)
     finally:
         if pipe_fp: pipe_fp.close()
 
     try:
+        # check length
+        if in_cl >= 0:
+            if in_cl != xfer_cl:
+                log.error("%s length mismatch: downloaded %s bytes but expected %s", logprefix, xfer_cl, in_cl)
+                raise ImportError("length mismatch: downloaded %s bytes but expected %s" % (xfer_cl, in_cl))
+            log.info("%s download length match OK: %s", logprefix, xfer_cl)
+
+        tmp_head = _s3_head(tmp_url, logprefix=logprefix)
+        log.debug("%s head result %s %s", logprefix, tmp_url, tmp_head)
+        if tmp_head["ContentLength"] != xfer_cl:
+            log.error("%s length mismatch: uploaded %s bytes but expected %s", logprefix, tmp_head['ContentLength'], xfer_cl)
+            raise ImportError("length mismatch: uploaded %s but expected %s" % (tmp_head['ContentLength'], xfer_cl))
+        else:
+            log.info("%s upload length match OK: %s", logprefix, xfer_cl)
+
+        # check digests
         xfer_digests = pipe_fp.hexdigests()
         for algo, expected_digest in input_digests.items():
             if xfer_digests[algo] != expected_digest:
                 log.error("%s %s digest mismatch: got %s but expected %s", logprefix, algo, xfer_digests[algo], expected_digest)
                 raise ImportError("%s digest mismatch: got %s but expected %s" % (algo, xfer_digests[algo], expected_digest))
             else:
-                log.info("%s %s digest match: %s", logprefix, algo, expected_digest)
+                log.info("%s %s digest match OK: %s", logprefix, algo, expected_digest)
 
         # store digests in final location metadata
         meta = {}
         for algo, digest in xfer_digests.items():
             meta[DIGEST_HEADER + algo.lower()] = digest.strip()
+
         # mark which digests were verified on import
         import_checks = ",".join(input_digests.keys())
         meta[META_PREFIX + "import-digests"] = import_checks
 
         # copy to final location
-        _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, logprefix=logprefix)
+        _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, etag_match=tmp_head['ETag'], logprefix=logprefix)
         return {"input": inurl,
                 "output": outurl,
                 "Content-Type": in_ct,
-                "Content-Length": in_cl,
+                "Content-Length": xfer_cl,
                 "digests": pipe_fp.hexdigests()}
 
     finally:
