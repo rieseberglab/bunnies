@@ -60,8 +60,8 @@ def read_download_set(fp, url_db, md5_db):
         url_db[src_url]['Type'] = extra
 
         prj = url_db[src_url]['ProjectId']
-        if ready_projects.get(prj, False):
-            raise Exception("URL %s is for project %s, but that project is not yet available", src_url, prj)
+        if not ready_projects.get(prj, False):
+            raise Exception("URL %s is for project %s, but that project is not yet available" % (src_url, prj))
 
         url_db[src_url]['Download'] = True
         url_db[src_url]['URL'] = src_url
