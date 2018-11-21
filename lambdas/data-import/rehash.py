@@ -132,13 +132,11 @@ def lambda_handler(event, context):
 
     futures = []
     start_time = time.time()
-    pos = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(pending)) as executor:
         for chunk in chunk_iter:
 
             # log it
-            pos += len(chunk)
-            progress(pos)
+            progress(len(chunk))
 
             for future in futures: future.result() # wait for previous batch to complete
             # submit last batch
