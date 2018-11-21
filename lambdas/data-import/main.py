@@ -54,7 +54,7 @@ from helpers import ProgressPercentage, HashingReader, yield_in_chunks, hex2b64
 
 MB = 1024 * 1024
 MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
-UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 8*MB
+UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 6*MB
 SIMPLE_STREAM_ENABLED = os.environ.get("SIMPLE_STREAM_ENABLED", False) not in [False, "false", "False", "0", "N", "n", "no"]
 DEFAULT_OUTPUT_HASHES = {} # {"md5": True, "sha1": True}
 
@@ -139,7 +139,7 @@ def _s3_get(url, logprefix="", **kwargs):
         data = obj.get()
         return (data, data['Body'])
     except ClientError as clierr:
-        log.error("%sdownload error", log_prefix, exc_info=clierr)
+        log.error("%sdownload error", logprefix, exc_info=clierr)
         raise ImportError("Error for URL %s: %s" % (url, clierr['Error']['Code']))
 
 def _http_get(url, logprefix="", **kwargs):
@@ -548,6 +548,12 @@ def handle_request(request, creds=None, tmp_bucket=None, logprefix=""):
     input_url = request.get("input")
     output_url = request.get("output")
     input_digests = request.get("digests", [])
+
+    log.info("%s [REQ] input: %s", logprefix, input_url)
+    for digest_type, digest_url in input_digests:
+        log.info("%s [REQ] input digest %s: %s", logprefix, digest_type, digest_url)
+    log.info("%s [REQ] output: %s", logprefix, output_url)
+    log.info("%s [REQ] chunk_size: %s simple_stream: %s", logprefix, UPLOAD_CHUNK_SIZE, SIMPLE_STREAM_ENABLED)
 
     for digest_typ, _ in input_digests:
         if digest_typ not in ("md5",):
