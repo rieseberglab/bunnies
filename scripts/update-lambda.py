@@ -15,6 +15,7 @@ import fnmatch
 import errno
 import subprocess
 import shutil
+import fnmatch
 
 import boto3
 from botocore.exceptions import ClientError
@@ -83,6 +84,8 @@ def main():
     parser.add_argument("lambdadir", metavar="LAMBDADIR", help="location where input lambda files are placed")
     parser.add_argument("--workdir", metavar="WORKDIR", type=str, default="/tmp/",
                         help="working directory (temp)")
+    parser.add_argument("--include", metavar="NAMEGLOB", action="append", dest="includes", default=[],
+                        help="deploy only entrypoints matching the glob (can be specified more than once)")
 
     args = parser.parse_args()
 
@@ -92,6 +95,27 @@ def main():
     except OSError as e:
         if e.errno != errno.EEXIST:
             raise
+
+    included_definitions = []
+    if args.includes:
+        log.info("Only including names matching one of: %s", ", ".join(args.includes))
+    with open(os.path.join(args.lambdadir, '.metadata.json'), "r") as metafd:
+        metadata = json.load(metafd)
+        for definition in metadata:
+            lambda_name = definition.get('FunctionName')
+            if args.includes:
+                for include_glob in args.includes:
+                    if fnmatch.fnmatch(lambda_name, include_glob):
+                        log.info("Including definition %s...", lambda_name)
+                        break
+                else:
+                    log.info("Skipping definition %s due to includes", lambda_name)
+                    continue
+            included_definitions.append(definition)
+
+    if not included_definitions:
+        log.info("Nothing to do.")
+        return
 
     tmpfd = None
     platform_tmpdir = None
@@ -133,50 +157,47 @@ def main():
     lambda_cli = boto3.client('lambda')
     iam_cli = boto3.resource('iam')
 
-    with open(os.path.join(args.lambdadir, '.metadata.json'), "r") as metafd:
-        metadata = json.load(metafd)
+    env_override = get_env_override(args.lambdadir)
 
-        env_override = get_env_override(args.lambdadir)
-        
-        lambdas = []
-        for definition in metadata:
-            updated = dict(definition)
+    lambdas = []
+    for definition in included_definitions:
+        updated = dict(definition)
+        lambda_name = updated['FunctionName']
 
-            rolename = definition['Role'] = definition['Role']
-            role = iam_cli.Role(rolename)
-            role.load()
+        rolename = definition['Role'] = definition['Role']
+        role = iam_cli.Role(rolename)
+        role.load()
 
-            updated['Role'] = role.arn
-            updated['Code'] = {'ZipFile': zipdata}
+        updated['Role'] = role.arn
+        updated['Code'] = {'ZipFile': zipdata}
 
-            lambda_name = updated['FunctionName']
-            lambda_env_vars = updated.setdefault('Environment', {}).setdefault("Variables", {})
-            lambda_env_override = env_override.get(lambda_name, {}).get("Environment", {})
-            for env_var, env_val in lambda_env_override.get('Variables', {}).items():
-                log.info("Overriding %s Environment Variable %s...", lambda_name, env_var)
-                lambda_env_vars[env_var] = env_val
+        lambda_env_vars = updated.setdefault('Environment', {}).setdefault("Variables", {})
+        lambda_env_override = env_override.get(lambda_name, {}).get("Environment", {})
+        for env_var, env_val in lambda_env_override.get('Variables', {}).items():
+            log.info("Overriding %s Environment Variable %s...", lambda_name, env_var)
+            lambda_env_vars[env_var] = env_val
 
-            try:
-                log.info("Creating lambda %s...", lambda_name)
-                lambdas.append(lambda_cli.create_function(**updated))
-            except ClientError as err:
-                if err.response['Error']['Code'] == 'ResourceConflictException':
-                    log.info("Creation failed: %s", err)
-                    now_func = lambda_cli.get_function_configuration(FunctionName=lambda_name)
-                    current_rev = now_func['RevisionId']
-                    log.info("Lambda %s already exists. updating code...", lambda_name)
-                    code_update = lambda_cli.update_function_code(**{
-                        "FunctionName": lambda_name,
-                        "ZipFile": zipdata,
-                        "RevisionId": current_rev
-                    })
-                    del updated['Code']
-                    updated['RevisionId'] = code_update['RevisionId']
-                    log.info("Lambda %s already exists. updating config...", lambda_name)
-                    config_update = lambda_cli.update_function_configuration(**updated)
-                    lambdas.append(config_update)
-                else:
-                    raise
+        try:
+            log.info("Creating lambda %s...", lambda_name)
+            lambdas.append(lambda_cli.create_function(**updated))
+        except ClientError as err:
+            if err.response['Error']['Code'] == 'ResourceConflictException':
+                log.info("Creation failed: %s", err)
+                now_func = lambda_cli.get_function_configuration(FunctionName=lambda_name)
+                current_rev = now_func['RevisionId']
+                log.info("Lambda %s already exists. updating code...", lambda_name)
+                code_update = lambda_cli.update_function_code(**{
+                    "FunctionName": lambda_name,
+                    "ZipFile": zipdata,
+                    "RevisionId": current_rev
+                })
+                del updated['Code']
+                updated['RevisionId'] = code_update['RevisionId']
+                log.info("Lambda %s already exists. updating config...", lambda_name)
+                config_update = lambda_cli.update_function_configuration(**updated)
+                lambdas.append(config_update)
+            else:
+                raise
 
 if __name__ == "__main__":
     main()
