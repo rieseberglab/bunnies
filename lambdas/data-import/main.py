@@ -102,7 +102,7 @@ def _nanuq_get(url, username="", password="", logprefix=""):
     if username:
         r = requests.post(url, data={'j_username': username,
                                      'j_password': password or ''},
-        stream=True)
+                          stream=True)
     else:
         r = requests.get(url, stream=True)
 
@@ -549,7 +549,7 @@ def handle_request(request, creds=None, tmp_bucket=None, logprefix=""):
     output_url = request.get("output")
     input_digests = request.get("digests", [])
 
-    for digest_typ, digest_url in input_digests:
+    for digest_typ, _ in input_digests:
         if digest_typ not in ("md5",):
             return {"error": "unrecognized digest type: %s" % (digest_typ,)}
     try:
