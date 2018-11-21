@@ -54,9 +54,9 @@ from helpers import ProgressPercentage, HashingReader, yield_in_chunks, hex2b64
 
 MB = 1024 * 1024
 MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
-UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 16*MB
+UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 8*MB
 SIMPLE_STREAM_ENABLED = os.environ.get("SIMPLE_STREAM_ENABLED", False) not in [False, "false", "False", "0", "N", "n", "no"]
-DEFAULT_OUTPUT_HASHES = {"md5": True}#, "sha1": True}
+DEFAULT_OUTPUT_HASHES = {} # {"md5": True, "sha1": True}
 
 # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
 META_PREFIX = "" # in boto you don't give x-amz-meta-
