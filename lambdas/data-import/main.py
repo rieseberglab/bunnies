@@ -309,7 +309,6 @@ def _s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, 
                                            **extra_args)
         parts = []
         partnumber = 0
-        md5s = b''
         progress(0)
 
         chunk_iter = yield_in_chunks(inputfp, UPLOAD_CHUNK_SIZE)
@@ -335,8 +334,7 @@ def _s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, 
 
             progress(chunklen)
         del chunk_iter
-        #objgraph.show_growth()
-        #objgraph.show_most_common_types(limit=20)
+
         # finish it
         log.info("%s completing multipart upload bucket:%s key:%s ...", logprefix, bucketname, keyname)
         completed = s3.complete_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'],
