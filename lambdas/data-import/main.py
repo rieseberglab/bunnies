@@ -198,7 +198,13 @@ def _s3_delete(objecturl, logprefix=""):
     log.info("%s S3-DELETE bucket:%s key:%s", logprefix, bucketname, keyname)
     return s3.delete_object(Bucket=bucketname, Key=keyname)
 
-def _s3_copy(srcurl, dsturl, content_type=None, meta=None, logprefix=""):
+def _s3_head(objecturl, logprefix=""):
+    bucketname, keyname = _s3_split_url(objecturl)
+    s3 = boto3.client('s3')
+    log.info("%s S3-HEAD bucket:%s key:%s", logprefix, bucketname, keyname)
+    return s3.head_object(Bucket=bucketname, Key=keyname)
+
+def _s3_copy(srcurl, dsturl, content_type=None, meta=None, etag_match=None, logprefix=""):
     src_bucketname, src_keyname = _s3_split_url(srcurl)
     dst_bucketname, dst_keyname = _s3_split_url(dsturl)
 
@@ -211,6 +217,8 @@ def _s3_copy(srcurl, dsturl, content_type=None, meta=None, logprefix=""):
     xtra = {}
     if content_type:
         xtra['ContentType'] = content_type
+    if etag_match:
+        xtra['CopySourceIfMatch'] = etag_match
     if meta:
         xtra['Metadata'] = meta
         xtra['MetadataDirective'] = 'REPLACE'
