@@ -4,6 +4,7 @@ import threading
 import time
 import io
 import base64
+import concurrent.futures
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,11 @@ class HashingReader(object):
 
         for algo in algorithms:
             self._hashers.append(getattr(hashlib, algo)())
+        if len(self._hashers):
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(self._hashers))
+        else:
+            self._executor = None
+        self._futures = []
 
     @property
     def progress_callback(self):
@@ -79,10 +85,28 @@ class HashingReader(object):
     def read(self, size=-1):
         chunk = self._sourcefp.read(size)
         self._pos += len(chunk)
-        for obj in self._hashers:
-            obj.update(chunk)
-        if self._progress_callback: self._progress_callback(len(chunk))
+
+        # notify
+        if self._progress_callback:
+            self._progress_callback(len(chunk))
+
+        # drain previous chunk
+        if self._futures:
+            for future in self._futures:
+                future.result()
+            self._futures = None
+
+        # asynchronously hash
+        if chunk and self._executor:
+            self._futures = [self._executor.submit(obj.update, chunk) for obj in self._hashers]
+
         return chunk
+
+    def close(self):
+        if self._executor:
+            self._executor.shutdown(wait=True)
+            self._executor = None
+        return self._sourcefp.close()
 
     def seekable(self, *args):
         return False
