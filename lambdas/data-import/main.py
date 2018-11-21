@@ -214,7 +214,7 @@ def _s3_copy(srcurl, dsturl, content_type=None, meta=None, logprefix=""):
     if meta:
         xtra['Metadata'] = meta
         xtra['MetadataDirective'] = 'REPLACE'
-    boto3.set_stream_logger('', logging.DEBUG)
+
     result = s3.copy_object(CopySource={'Bucket': src_bucketname, 'Key': src_keyname},
                             Bucket=dst_bucketname, Key=dst_keyname, **xtra)
     log.debug("%s S3-COPY complete: bucket:%s key:%s etag:%s", logprefix, dst_bucketname, dst_keyname,
