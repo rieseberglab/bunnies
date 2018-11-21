@@ -54,8 +54,6 @@ def main_handler():
 
     parser.add_argument("--threads", metavar="THREADS", type=int, default=1)
     parser.add_argument("--tmpbucket", metavar="TMPBUCKET", help="bucket name in which to store temporary files. optional", default='')
-    parser.add_argument("--creds", metavar="CREDSFILE", type=str, default=None,
-                        help="credentials file (yaml) with username and password key")
 
     args = parser.parse_args()
 
@@ -63,17 +61,6 @@ def main_handler():
     creds['username'] = os.environ.get('USERNAME', '')
     creds['password'] = os.environ.get('PASSWORD', '')
     tmp_bucket = os.environ.get('TMPBUCKET', '')
-
-    if args.creds:
-        with open(args.creds, "r") as stream:
-            try:
-                creds = yaml.load(stream)
-                username = creds.get('username', '')
-                password = creds.get('password', '')
-            except yaml.YAMLError as exc:
-                raise
-    else:
-        creds=None
 
     digests = []
 
