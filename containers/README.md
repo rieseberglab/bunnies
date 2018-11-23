@@ -201,12 +201,12 @@ Developer Notes
 
    Your docker client will need to login to the registry:
 
-     # run the command that docker will need to use
-     $(aws ecr get-login --no-include-email --region ca-central-1)
+       # run the command that docker will need to use
+       $(aws ecr get-login --no-include-email --region ca-central-1)
 
-     # note that the aws binary shipped with ubuntu is old and doesn't support `get-login`
-     # use the one installed by pip. (see requirements). The first time, you'll have
-     # to run `aws configure`
+       # note that the aws binary shipped with ubuntu is old and doesn't support `get-login`
+       # use the one installed by pip. (see requirements). The first time, you'll have
+       # to run `aws configure`
 
 
 4. inside the registry, create one ECS container repository per pipeline rule.
@@ -240,7 +240,7 @@ Other commands:
 
        aws ecr describe-repositories
 
-    Full instructions are [here](https://docs.aws.amazon.com/AmazonECR/latest/userguide/ECR_AWSCLI.html).
+   Full instructions are [here](https://docs.aws.amazon.com/AmazonECR/latest/userguide/ECR_AWSCLI.html).
 
 3. Delete a repo and all its images
 
