@@ -46,7 +46,7 @@ To work with FARGATE, your task definition has some restrictions:
   - it needs to have `requiresCompatibilities: ["FARGATE"]` in its definition.
 
   - it needs to fall within one of the following vCPU/memory requirement
-    brackes. Those values are maximum _total_ values for all the conainers
+    brackets. Those values are maximum _total_ values for all the containers
     in your task:
 
       - 256 (.25 vCPU)	512 (0.5GB), 1024 (1GB), 2048 (2GB)
@@ -147,13 +147,12 @@ container image. e.g. :
     COPY ./platform  /bunnies/
     ENTRYPOINT ["/bunnies/bin/bunny-init"]
 
-
 At build time, bunnies recomputes the shimmed docker image,
 and updates the ECS task definitions to point to the shimmed
 container:
 
-   # give the shimmed image a new name, derived from the user's
-   docker build -t bunnies_rieseberglab_3:latest  .
+    # give the shimmed image a new name, derived from the user's
+    docker build -t bunnies_rieseberglab_3:latest  .
 
 The COMMAND _can_ be changed when the container is run,
 but the ENTRYPOINT _cannot_. Running the container with command
