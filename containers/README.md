@@ -140,12 +140,12 @@ is a binary interface between the user's script, and bunnies.
 This can be achieved with a Docker layer and a new "shimmed"
 container image. e.g. :
 
-   # start from the user's container
-   FROM rieseberglab/analytics:3
+    # start from the user's container
+    FROM rieseberglab/analytics:3
 
-   # install platform tools
-   COPY ./platform  /bunnies/
-   ENTRYPOINT ["/bunnies/bin/bunny-init"]
+    # install platform tools
+    COPY ./platform  /bunnies/
+    ENTRYPOINT ["/bunnies/bin/bunny-init"]
 
 
 At build time, bunnies recomputes the shimmed docker image,
@@ -159,7 +159,7 @@ The COMMAND _can_ be changed when the container is run,
 but the ENTRYPOINT _cannot_. Running the container with command
 `"ls -l"`, would, for instance be equivalent to:
 
-   /bunnies/bin/bunny-init "ls -l"
+    /bunnies/bin/bunny-init "ls -l"
 
 This allows the platform to take care of bootstrapping the task to the
 point where the script defined in the pipeline can be run.
@@ -192,49 +192,48 @@ Developer Notes
 1. install docker
 
 2. create an ECS container registry (or use the default one associated
-    with the account). boto doesn't support creating a repository -- do
-    it from the console.
-  
-    https://ca-central-1.console.aws.amazon.com/ecs/home?region=ca-central-1#/repositories/create/new
+   with the account). boto doesn't support creating a repository -- do
+   it from the console.
+
+   https://ca-central-1.console.aws.amazon.com/ecs/home?region=ca-central-1#/repositories/create/new
 
 3. Login to the registry
 
-    Your docker client will need to login to the registry:
+   Your docker client will need to login to the registry:
 
-    # run the command that docker will need to use
-    $(aws ecr get-login --no-include-email --region ca-central-1)
+     # run the command that docker will need to use
+     $(aws ecr get-login --no-include-email --region ca-central-1)
 
-    # note that the aws binary shipped with ubuntu is old and doesn't support `get-login`
-    # use the one installed by pip. (see requirements). The first time, you'll have
-    # to run `aws configure`
+     # note that the aws binary shipped with ubuntu is old and doesn't support `get-login`
+     # use the one installed by pip. (see requirements). The first time, you'll have
+     # to run `aws configure`
 
 
 4. inside the registry, create one ECS container repository per pipeline rule.
 
-   - Use docker CLI to push to the ECR repository of choice. (docker build, docker push, etc.)
+  - Use docker CLI to push to the ECR repository of choice. (docker build, docker push, etc.)
 
-        docker build -t test .
+          docker build -t test .
 
-        # make the new local image an alias for a remote name
-        docker tag test:latest 458136422280.dkr.ecr.ca-central-1.amazonaws.com/test:latest
+          # make the new local image an alias for a remote name
+          docker tag test:latest 458136422280.dkr.ecr.ca-central-1.amazonaws.com/test:latest
 
-        # push the local image to its repository
-        docker push 458136422280.dkr.ecr.ca-central-1.amazonaws.com/test:latest
-
+          # push the local image to its repository
+          docker push 458136422280.dkr.ecr.ca-central-1.amazonaws.com/test:latest
 
    - You can also create empty repos from the console:
 
-        aws ecr create-repository --repository-name <reponame> | tee repo-ubuntu.json
+          aws ecr create-repository --repository-name <reponame> | tee repo-ubuntu.json
 
-        # there will be a key called: repositoryArn which can be used to associate local images with it.
-        docker tag localimage:localtag <repositoryArn>:remotetag
+          # there will be a key called: repositoryArn which can be used to associate local images with it.
+          docker tag localimage:localtag <repositoryArn>:remotetag
 
 # Creating tasks
 ================
 
 Before you can invoke your containers using ECS, you need to define tasks. See `scripts/setup-tasks.sh`.
 
-Other commands: 
+Other commands:
 ===============
 
 1. List current ECR repositories:
