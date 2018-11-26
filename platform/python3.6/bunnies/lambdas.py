@@ -16,6 +16,10 @@ import base64
 import io
 from . import setup_logging
 log = logging.getLogger(__package__)
+print(__package__)
+
+DATA_IMPORT = "data-import"
+DATA_REHASH = "data-rehash"
 
 def get_lambda_client():
     """return a client that can wait more than 60 seconds for the result of a lambda"""
@@ -92,8 +96,10 @@ def invoke_sync(function_name, client_context=None, Payload=None, LogType='Tail'
 
     if 'FunctionError' in response:
         if response['FunctionError'] == "Handled":
+            log.debug("Received Handled error.")
             return (1, response)
         if response['FunctionError'] == "Unhandled":
+            log.debug("Received Unhandled error.")
             return (2, response)
         log.error("Unknown FunctionError value: %s", response['FunctionError'])
         return (3, response)
