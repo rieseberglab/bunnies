@@ -90,6 +90,7 @@ def lambda_handler(event, context):
     head_res = client.head_object(Bucket=src_bucket, Key=src_key)
     log.debug("HEAD: %s", head_res)
     orig_etag = head_res['ETag']
+    orig_ct = head_res['ContentType']
 
     # check that object has expected etag (if possible)
     expected_etag = event.get("src_etag", None)
@@ -177,12 +178,13 @@ def lambda_handler(event, context):
     copy_result = client.copy_object(Key=dst_key, Bucket=dst_bucket,
                                      CopySource={"Key": src_key, "Bucket": src_bucket},
                                      CopySourceIfMatch=resp['ETag'],
+                                     ContentType=orig_ct,
                                      Metadata=new_meta,
                                      MetadataDirective='REPLACE')
     log.info("copy completed in %8.3fseconds", time.time() - start_time)
     log.debug("copy result: %s", copy_result)
     return _form_response(dst_bucket, dst_key, resp['ContentLength'],
-                          copy_result['CopyObjectResult']['LastModified'],
+                          copy_result['CopyObjectResult']['LastModified'].strftime("%a, %d %m %Y %H:%M:%S %Z"),
                           copy_result['CopyObjectResult']['ETag'],
                           new_meta)
 
