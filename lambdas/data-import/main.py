@@ -55,12 +55,11 @@ from helpers import ProgressPercentage, HashingReader, yield_in_chunks, hex2b64
 MB = 1024 * 1024
 MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
 UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 6*MB
-SIMPLE_STREAM_ENABLED = os.environ.get("SIMPLE_STREAM_ENABLED", False) not in [False, "false", "False", "0", "N", "n", "no"]
 DEFAULT_OUTPUT_HASHES = {} # {"md5": True, "sha1": True}
 
 # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
-META_PREFIX = "" # in boto you don't give x-amz-meta-
-DIGEST_HEADER = META_PREFIX + "digest-" # + algo.lowercase()
+DIGEST_HEADER = "digest-" # + algo.lowercase()
+IMPORT_DIGESTS_HEADER = "import-digests"
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
@@ -140,7 +139,7 @@ def _s3_get(url, logprefix="", **kwargs):
         return (data, data['Body'])
     except ClientError as clierr:
         log.error("%sdownload error", logprefix, exc_info=clierr)
-        raise ImportError("Error for URL %s: %s" % (url, clierr['Error']['Code']))
+        raise ImportError("Error for URL %s: %s" % (url, clierr.response['Error']['Code']))
 
 def _http_get(url, logprefix="", **kwargs):
     """http or https GET"""
@@ -257,7 +256,7 @@ def _s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_leng
         'ContentType': content_type or 'application/octet-stream',
         'ContentMD5': base64_md5,
         'ContentLength': content_length,
-        'Metadata': {'foo':'blah'}
+        'Metadata': {}
     }
 
     if meta:
@@ -420,42 +419,97 @@ def _digest_from_sum_url(digest_url, entry_name, creds=None, logprefix=""):
             return hexdigest
     return None
 
-def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, logprefix=""):
+def _get_source_digest(digest_url, digest_type, entry_name, creds=None, logprefix=""):
+    log.info("%s fetching %s digest for name %s...", logprefix, digest_type, entry_name)
+
+    # TODO -- support hash://md5:asdasddsa/ URLs
+
+    hexdigest = _digest_from_sum_url(digest_url, entry_name, creds=creds,
+                                     logprefix=logprefix.rstrip() + "." + digest_type + " ")
+    if not hexdigest:
+        raise ImportError("cannot find %s digest for file %s" % (digest_type, entry_name))
+    log.info("%s found digest: %s %s %s", logprefix, digest_type, entry_name, hexdigest)
+    return hexdigest
+
+def _match_existing(s3url, expected_digests, expected_len, expected_ct, logprefix=""):
+    """
+    Retrieve the information from the target object in S3 (if any). If present,
+    ensure it matches what is expected.
+    """
+    head_res = _s3_head(s3url, logprefix=logprefix)
+
+    if expected_len >= 0 and expected_len != head_res['ContentLength']:
+        raise ImportError("destination exists. length mismatch: destination has %s, but expected %s" % (
+            head_res['ContentLength'], expected_len))
+
+    if expected_ct and expected_ct != head_res['ContentType']:
+        raise ImportError("destination exists. content type mismatch: destination has %s, but expected %s" % (
+            head_res['ContentType'], expected_ct))
+
+    digest_verifications = 0
+    head_digests = {key[len(DIGEST_HEADER):]: val for key, val in head_res['Metadata'].items()
+                    if key.startswith(DIGEST_HEADER)}
+    for dtype, dhex in expected_digests.items():
+        if dhex:
+            if dhex != head_digests[dtype]:
+                raise ImportError("destination exists. %s digest mismatch: destination has %s, but expected %s" % (
+                    dtype, head_digests[dtype], dhex))
+            else:
+                digest_verifications += 1
+
+    if digest_verifications == 0:
+        raise ImportError("destination exists. no methods of identification are provided.")
+
+    return {"Content-Type": head_res['ContentType'],
+            "Content-Length": head_res['ContentLength'],
+            "digests": head_digests}
+
+def _handle_request_full(req, creds=None, tmp_bucket=None, logprefix=""):
     """do the work for one url/digesturl combo"""
 
     logprefix=logprefix or ""
     input_digests = {}
 
-    in_parsed = urlparse(inurl)
-    basename = os.path.split(in_parsed.path)[1]
-    for digest_type, digest_url in digests:
-        digest_type = digest_type.strip().lower()
-        log.info("%s fetching %s digest for name %s...", logprefix, digest_type, basename)
-        hexdigest = _digest_from_sum_url(digest_url, basename, creds=creds, logprefix=logprefix.rstrip() + "." + digest_type + " ")
-        if not hexdigest:
-            raise ImportError("cannot find %s digest for file %s" % (digest_type, basename))
-        log.info("%s found digest: %s %s", logprefix, digest_type, basename)
-        input_digests[digest_type] = hexdigest
+    inurl = req["input"]
+    outurl = req["output"]
+    tmp_bucket = req.get("tmp_bucket", tmp_bucket)
 
     out_parsed = urlparse(outurl)
     if out_parsed.scheme != "s3":
         log.error("%sbad output url %s. expected an s3:// url", logprefix, outurl)
         raise ImportError("bad output url")
-    out_bucket = out_parsed.netloc
+
+    in_parsed = urlparse(inurl)
+    for digest_type, digest_url in req.setdefault('digests', []):
+        digest_type = digest_type.strip().lower()
+        input_digests[digest_type] = _get_source_digest(digest_url, digest_type, os.path.split(in_parsed.path)[1],
+                                                        creds=creds, logprefix=logprefix.rstrip() + "." + digest_type)
 
     # if outurl is a key prefix (directory), append input basename to it.
+    out_bucket = out_parsed.netloc
     if out_parsed.path.endswith("/"):
-        outurl = os.path.join(outurl, basename)
+        outurl = os.path.join(outurl, os.path.split(in_parsed.path)[1])
 
-    #
-    # todo check if outurl exists and has the expected sums.
-    # shortcircuit here
-    #
 
     in_headers, in_fp = _get(inurl, creds=creds, logprefix=logprefix)
     in_ct = in_headers.get('Content-Type')
     in_cl = int(in_headers.get('Content-Length', -1), 10)
 
+    try:
+        match = _match_existing(outurl, input_digests, in_cl, in_ct, logprefix=logprefix)
+        match['input'] = inurl
+        match['output'] = outurl
+        log.info("%s A file already exists at the destination and matches the input description. Done.",
+                 logprefix)
+        return match
+    except ClientError as clierr:
+        code = clierr.response['Error']['Code']
+        if code == "404":
+            pass
+        else:
+            log.error("%s error checking for existing file: %s", logprefix, clierr.response['Error'],
+                      exc_info=clierr)
+            raise ImportError("Error for URL %s: %s" % (inurl, clierr.response['Error']))
 
     # supported by default
     output_hashes = dict(DEFAULT_OUTPUT_HASHES)
@@ -470,15 +524,14 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
     tmp_key = "reprod-data-import/%s" % (uuid.uuid4(),)
     tmp_url = "s3://%s/%s" % (tmp_bucket, tmp_key)
     try:
+        # mark which digests will be verified on import
+        import_checks = ",".join(input_digests.keys())
+
         start_time = time.time()
-        if SIMPLE_STREAM_ENABLED and in_cl >= 0 and in_cl <= MAX_SINGLE_UPLOAD_SIZE and input_digests['md5']:
-            pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
-            pipe_fp.progress_callback = ProgressPercentage(size=in_cl, logprefix=logprefix, logger=log)
-            upload_result = _s3_streaming_put_simple(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
-                                                     content_md5=input_digests['md5'], logprefix=logprefix)
-        else:
-            pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
-            upload_result = _s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
+        pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
+
+        upload_result = _s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
+                                          meta={IMPORT_DIGESTS_HEADER: import_checks}, logprefix=logprefix)
 
         # # from file
         # pipe_fp = HashingReader(in_fp, algorithms=())#output_hashes.keys())
@@ -517,23 +570,38 @@ def _handle_request_full(inurl, outurl, digests, creds=None, tmp_bucket=None, lo
                 raise ImportError("%s digest mismatch: got %s but expected %s" % (algo, xfer_digests[algo], expected_digest))
             else:
                 log.info("%s %s digest match OK: %s", logprefix, algo, expected_digest)
+    except Exception:
+        _s3_delete(tmp_url, logprefix=logprefix)
+        raise
 
+    if req.get('download_only', True):
+        log.info("%s download_only is set. skipping copy to final location. returning details.", logprefix)
+        return {
+            "input": inurl,
+            "output": tmp_url,
+            "move_to": outurl,
+            "ETag": tmp_head['ETag'],
+            "Content-Type": in_ct,
+            "Content-Length": xfer_cl,
+            "digests": pipe_fp.hexdigests()
+        } 
+    try:
         # store digests in final location metadata
         meta = {}
         for algo, digest in xfer_digests.items():
             meta[DIGEST_HEADER + algo.lower()] = digest.strip()
-
-        # mark which digests were verified on import
-        import_checks = ",".join(input_digests.keys())
-        meta[META_PREFIX + "import-digests"] = import_checks
+        meta[IMPORT_DIGESTS_HEADER] = import_checks
 
         # copy to final location
-        _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, etag_match=tmp_head['ETag'], logprefix=logprefix)
-        return {"input": inurl,
-                "output": outurl,
-                "Content-Type": in_ct,
-                "Content-Length": xfer_cl,
-                "digests": pipe_fp.hexdigests()}
+        copy_res = _s3_copy(tmp_url, outurl, content_type=in_ct, meta=meta, etag_match=tmp_head['ETag'], logprefix=logprefix)
+        return {
+            "input": inurl,
+            "output": outurl,
+            "Content-Type": in_ct,
+            "Content-Length": xfer_cl,
+            "ETag":  copy_res['CopyObjectResult']['ETag'],
+            "digests": pipe_fp.hexdigests()
+        }
 
     finally:
         _s3_delete(tmp_url, logprefix=logprefix)
@@ -547,19 +615,19 @@ def handle_request(request, creds=None, tmp_bucket=None, logprefix=""):
     """
     input_url = request.get("input")
     output_url = request.get("output")
-    input_digests = request.get("digests", [])
+    input_digests = request.setdefault("digests", [])
 
     log.info("%s [REQ] input: %s", logprefix, input_url)
     for digest_type, digest_url in input_digests:
         log.info("%s [REQ] input digest %s: %s", logprefix, digest_type, digest_url)
     log.info("%s [REQ] output: %s", logprefix, output_url)
-    log.info("%s [REQ] chunk_size: %s simple_stream: %s", logprefix, UPLOAD_CHUNK_SIZE, SIMPLE_STREAM_ENABLED)
+    log.info("%s [REQ] chunk_size: %s", logprefix, UPLOAD_CHUNK_SIZE)
 
     for digest_typ, _ in input_digests:
         if digest_typ not in ("md5",):
             return {"error": "unrecognized digest type: %s" % (digest_typ,)}
     try:
-        return _handle_request_full(input_url, output_url, input_digests, creds=creds, tmp_bucket=tmp_bucket, logprefix=logprefix)
+        return _handle_request_full(request, creds=creds, tmp_bucket=tmp_bucket, logprefix=logprefix)
     except ImportError as ie:
         return {"input": input_url, "output": output_url, "error": str(ie)}
 
@@ -573,7 +641,8 @@ def lambda_handler(event, context):
     creds = {}
     creds['username'] = os.environ.get('USERNAME', '')
     creds['password'] = os.environ.get('PASSWORD', '')
-    tmp_bucket = os.environ.get('TMPBUCKET', '')
+    tmp_bucket = os.environ.get('TMPBUCKET', None)
+    tmp_bucket = event.get("TMPBUCKET", tmp_bucket)
 
     results = [ handle_request(req, creds=creds, tmp_bucket=tmp_bucket, logprefix="%03d" % i) for i, req in enumerate(requests) ]
     error_count = len([r for r in results if "error" in r])
