@@ -15,11 +15,10 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import boto3
 import botocore
+from urllib.parse import urlparse
 
 import bunnies.lambdas as lambdas
 import bunnies
-
-DATA_IMPORT_LAMBDA = "data-import"
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
@@ -35,20 +34,78 @@ def setup_logging(loglevel=logging.INFO):
 
 log = logging.getLogger(__name__)
 
-def do_request(req):
+def _s3_split_url(objecturl):
+    """splits an s3://foo/bar/baz url into bucketname, keyname: ("foo", "bar/baz")
+
+    the keyname may be empty
+    """
+    o = urlparse(objecturl)
+    if o.scheme != "s3":
+        raise ValueError("not an s3 url")
+
+    keyname = o.path
+    bucketname = o.netloc
+
+    # all URL paths start with /. strip it.
+    if keyname.startswith("/"):
+        keyname = keyname[1:]
+
+    return bucketname, keyname
+
+def do_request(batch_no, req):
     """execute one request. tail the logs. wait for completion"""
     log.debug("do_request: %s", req)
-    code, response = lambdas.invoke_sync(DATA_IMPORT_LAMBDA, Payload=req)
-    data = response['Payload'].read()
+    req = dict(req)
+    log.info("REQ%s data-import request: %s", batch_no, json.dumps(req, sort_keys=True, indent=4, separators=(",", ": ")))
+    code, response = lambdas.invoke_sync(lambdas.DATA_IMPORT, Payload=req)
+    data = response['Payload'].read().decode("ascii")
     if code != 0:
-        raise Exception("The lambda failed.")
-    return json.loads(data.decode('ascii'))
+        raise Exception("data-import failed to complete: %s" % (data,))
+    data_obj = json.loads(data)
+    log.info("REQ%s data-import result: %s", batch_no, data_obj)
+    if data_obj['error_count'] > 0:
+        raise Exception("data-import returned an error: %s" % (data_obj["results"][0],))
+
+    details = data_obj['results'][0]
+    if details.get("move_to", None):
+        log.info("%s moving temp file to final location: %s", batch_no, details["move_to"])
+        tmp_src = _s3_split_url(details['output'])
+        cpy_dst = _s3_split_url(details['move_to'])
+
+        new_req = {
+            "src_bucket": tmp_src[0],
+            "src_key": tmp_src[1],
+            "dst_bucket": cpy_dst[0],
+            "dst_key": cpy_dst[1],
+            "src_etag": details["ETag"],
+            "digests": details["digests"]
+        }
+        try:
+            log.info("REQ%s data-rehash request: %s", batch_no, json.dumps(new_req, sort_keys=True, indent=4, separators=(",", ": ")))
+            code, response = lambdas.invoke_sync(lambdas.DATA_REHASH, Payload=new_req)
+            data = response['Payload'].read().decode("ascii")
+            if code != 0:
+                raise Exception("data-rehash failed to complete: %s" % (data,))
+            data_obj = json.loads(data)
+            if data_obj.get('error', None):
+                raise Exception("data-rehash returned an error: %s" % (data["results"][0],))
+            return data
+        finally:
+            session = boto3.session.Session()
+            s3 = session.client('s3', config=botocore.config.Config(read_timeout=300, retries={'max_attempts': 0}))
+            log.info("REQ%s deleting temp file: Bucket=%s Key=%s", batch_no, tmp_src[0], tmp_src[1])
+            try:
+                s3.delete_object(Bucket=tmp_src[0], Key=tmp_src[1])
+            except Exception as delete_exc:
+                log.error("REQ%s delete failed", exc_info=delete_exc)
+    else:
+        # final result - no delete needed.
+        return details
 
 def main_handler():
     """do the work. CLI"""
 
     import argparse
-    import yaml
 
     parser = argparse.ArgumentParser(description=__doc__)
 
@@ -60,7 +117,7 @@ def main_handler():
     creds = {}
     creds['username'] = os.environ.get('USERNAME', '')
     creds['password'] = os.environ.get('PASSWORD', '')
-    tmp_bucket = os.environ.get('TMPBUCKET', '')
+    tmp_bucket = os.environ.get('TMPBUCKET', None)
 
     digests = []
 
@@ -78,11 +135,15 @@ def main_handler():
             dtype, durl = digestarg.split(':', maxsplit=1)
             digests.append([dtype, durl])
 
-        return {
+        req_obj = {
+            'download_only': True, # skip the tail end copy.
             'input': url,
             'output': outputurl,
             'digests': digests
         }
+        if args.tmpbucket is not None:
+            req_obj["tmp_bucket"] = args.tmpbucket
+        return req_obj
 
     requests = []
     for lineno, line in enumerate(sys.stdin):
@@ -98,26 +159,29 @@ def main_handler():
     futures = []
     log.info("Submitting %d requests with %d threads...", len(requests), args.threads)
 
+    total_count = len(requests)
+    upload_done_count = 0
     upload_error_count = 0
     results = {}
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = { executor.submit(do_request, {"requests": [req]}): lineno for (lineno, req) in requests }
+        futures = { executor.submit(do_request, lineno, {"requests": [req]}): lineno for (lineno, req) in requests }
         for future in as_completed(futures):
             lineno = futures[future]
+            upload_done_count += 1
             try:
                 log.info("request on line %d completed.", lineno)
                 data = future.result()
                 results[lineno] = data
+                log.info("request result: %s", json.dumps(data, sort_keys=True, indent=4, separators=(",", ": ")))
             except Exception as exc:
                 log.error("request on line %d generated an exception: %s", lineno, exc, exc_info=exc)
-                results[lineno] = {'error_count': 1, 'results': [{"error": str(exc)}]}
+                results[lineno] = {"error": str(exc)}
+                upload_error_count += 1
 
-    upload_results = []
-    for lineno in sorted(results.keys()):
-        result = results[lineno]
-        if result.get('error_count', 0) > 0:
-            upload_error_count += result['error_count']
-        upload_results += result['results']
+            log.info("progress %4d/%4d done (%8.3f%%). %d error(s) encountered.",
+                     upload_done_count, total_count, upload_done_count * 100.0 / total_count, upload_error_count)
+
+    upload_results = [results[lineno] for lineno in sorted(results.keys())]
 
     json.dump(upload_results, sys.stdout, sort_keys=True, indent=4, separators=(",", ": "))
     if upload_error_count > 0:
