@@ -6,10 +6,14 @@
    metadata to include the discovered hashes.
 
 {
-  "src_key":   "foo",
   "src_bucket": "bar",
-  "dst_key": "foo-hashed"  # defaults src_key
+  "src_key":   "foo",
+
   "dst_bucket": "bar"      # defaults src_bucket
+  "dst_key": "foo-hashed"  # defaults src_key
+
+  ["src_etag": "adfafaaaaa...",]
+
   "digests": {"md5": null | "expectedhex", "digest": null | "expectedhex"}
 }
 
@@ -86,6 +90,11 @@ def lambda_handler(event, context):
     head_res = client.head_object(Bucket=src_bucket, Key=src_key)
     log.debug("HEAD: %s", head_res)
     orig_etag = head_res['ETag']
+
+    # check that object has expected etag (if possible)
+    expected_etag = event.get("src_etag", None)
+    if expected_etag and expected_etag != orig_etag:
+        return {"error": "etag mismatch. expected %s but found %s" % (expected_etag, orig_etag)}
 
     # extract 'digest-ALGO' from Metadata in existing object
     # trust that they are accurate
