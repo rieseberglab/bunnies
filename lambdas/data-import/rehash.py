@@ -184,7 +184,7 @@ def lambda_handler(event, context):
     log.info("copy completed in %8.3fseconds", time.time() - start_time)
     log.debug("copy result: %s", copy_result)
     return _form_response(dst_bucket, dst_key, resp['ContentLength'],
-                          copy_result['CopyObjectResult']['LastModified'].strftime("%a, %d %m %Y %H:%M:%S %Z"),
+                          copy_result['CopyObjectResult']['LastModified'].strftime("%a, %d %b %Y %H:%M:%S %Z"),
                           copy_result['CopyObjectResult']['ETag'],
                           new_meta)
 
