@@ -67,40 +67,40 @@ def do_request(batch_no, req):
         raise Exception("data-import returned an error: %s" % (data_obj["results"][0],))
 
     details = data_obj['results'][0]
-    if details.get("move_to", None):
-        log.info("%s moving temp file to final location: %s", batch_no, details["move_to"])
-        tmp_src = _s3_split_url(details['output'])
-        cpy_dst = _s3_split_url(details['move_to'])
-
-        new_req = {
-            "src_bucket": tmp_src[0],
-            "src_key": tmp_src[1],
-            "dst_bucket": cpy_dst[0],
-            "dst_key": cpy_dst[1],
-            "src_etag": details["ETag"],
-            "digests": details["digests"]
-        }
-        try:
-            log.info("REQ%s data-rehash request: %s", batch_no, json.dumps(new_req, sort_keys=True, indent=4, separators=(",", ": ")))
-            code, response = lambdas.invoke_sync(lambdas.DATA_REHASH, Payload=new_req)
-            data = response['Payload'].read().decode("ascii")
-            if code != 0:
-                raise Exception("data-rehash failed to complete: %s" % (data,))
-            data_obj = json.loads(data)
-            if data_obj.get('error', None):
-                raise Exception("data-rehash returned an error: %s" % (data["results"][0],))
-            return data
-        finally:
-            session = boto3.session.Session()
-            s3 = session.client('s3', config=botocore.config.Config(read_timeout=300, retries={'max_attempts': 0}))
-            log.info("REQ%s deleting temp file: Bucket=%s Key=%s", batch_no, tmp_src[0], tmp_src[1])
-            try:
-                s3.delete_object(Bucket=tmp_src[0], Key=tmp_src[1])
-            except Exception as delete_exc:
-                log.error("REQ%s delete failed", exc_info=delete_exc)
-    else:
+    if not details.get("move_to"):
         # final result - no delete needed.
         return details
+
+    log.info("%s moving temp file to final location: %s", batch_no, details["move_to"])
+    tmp_src = _s3_split_url(details['output'])
+    cpy_dst = _s3_split_url(details['move_to'])
+
+    new_req = {
+        "src_bucket": tmp_src[0],
+        "src_key": tmp_src[1],
+        "dst_bucket": cpy_dst[0],
+        "dst_key": cpy_dst[1],
+        "src_etag": details["ETag"],
+        "digests": details["digests"]
+    }
+    try:
+        log.info("REQ%s data-rehash request: %s", batch_no, json.dumps(new_req, sort_keys=True, indent=4, separators=(",", ": ")))
+        code, response = lambdas.invoke_sync(lambdas.DATA_REHASH, Payload=new_req)
+        data = response['Payload'].read().decode("ascii")
+        if code != 0:
+            raise Exception("data-rehash failed to complete: %s" % (data,))
+        data_obj = json.loads(data)
+        if data_obj.get('error', None):
+            raise Exception("data-rehash returned an error: %s" % (data["results"][0],))
+        return data_obj
+    finally:
+        session = boto3.session.Session()
+        s3 = session.client('s3', config=botocore.config.Config(read_timeout=300, retries={'max_attempts': 0}))
+        log.info("REQ%s deleting temp file: Bucket=%s Key=%s", batch_no, tmp_src[0], tmp_src[1])
+        try:
+            s3.delete_object(Bucket=tmp_src[0], Key=tmp_src[1])
+        except Exception as delete_exc:
+            log.error("REQ%s delete failed", exc_info=delete_exc)
 
 def main_handler():
     """do the work. CLI"""
@@ -175,7 +175,9 @@ def main_handler():
                 log.info("request result: %s", json.dumps(data, sort_keys=True, indent=4, separators=(",", ": ")))
             except Exception as exc:
                 log.error("request on line %d generated an exception: %s", lineno, exc, exc_info=exc)
-                results[lineno] = {"error": str(exc)}
+                error_result = dict(requests[lineno])
+                error_result["error"] = str(exc)
+                results[lineno] = error_result
                 upload_error_count += 1
 
             log.info("progress %4d/%4d done (%8.3f%%). %d error(s) encountered.",
@@ -185,7 +187,9 @@ def main_handler():
 
     json.dump(upload_results, sys.stdout, sort_keys=True, indent=4, separators=(",", ": "))
     if upload_error_count > 0:
+        log.error("exiting. encountered %d error(s) out of %d requests.", upload_error_count, total_count)
         return 1
+    log.info("completed %d requests.", total_count)
     return 0
 
 if __name__ == "__main__":
