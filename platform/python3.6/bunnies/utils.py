@@ -4,6 +4,7 @@ misc utilities
 
 import os, os.path
 import errno
+from urllib.parse import urlparse
 
 def find_config_file(startdir, filname):
     """recurse in folder and parents to find filname and open it"""
@@ -18,3 +19,21 @@ def find_config_file(startdir, filname):
         return None
 
     return find_config_file(parent, filname)
+
+def s3_split_url(objecturl):
+    """splits an s3://foo/bar/baz url into bucketname, keyname: ("foo", "bar/baz")
+
+    the keyname may be empty
+    """
+    o = urlparse(objecturl)
+    if o.scheme != "s3":
+        raise ValueError("not an s3 url")
+
+    keyname = o.path
+    bucketname = o.netloc
+
+    # all URL paths start with /. strip it.
+    if keyname.startswith("/"):
+        keyname = keyname[1:]
+
+    return bucketname, keyname

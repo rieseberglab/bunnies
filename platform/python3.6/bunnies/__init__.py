@@ -10,6 +10,8 @@ import errno
 
 from . import exc
 from . import utils
+from . import constants
+from .graph import S3Blob, Transform
 
 logger = logging.getLogger(__package__)
 

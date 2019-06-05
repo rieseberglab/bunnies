@@ -58,7 +58,7 @@ UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 6*MB
 DEFAULT_OUTPUT_HASHES = {} # {"md5": True, "sha1": True}
 
 # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
-DIGEST_HEADER = "digest-" # + algo.lowercase()
+DIGEST_HEADER = bunnies.constants.DIGEST_HEADER_PREFIX # + algoname
 IMPORT_DIGESTS_HEADER = "import-digests"
 
 def setup_logging(loglevel=logging.INFO):
