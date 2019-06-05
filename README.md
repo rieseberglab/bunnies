@@ -12,7 +12,7 @@ Installation
 
    _Note: if you don't have virtualenv, you can install it first with
         `pip install virtualenv`, or use the builtin module in python3,
-	i.e. `python3 -m venv .reprod`_
+	i.e. `python3 -m venv .venv`_
 
 1. activate env
 
