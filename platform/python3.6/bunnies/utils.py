@@ -5,6 +5,7 @@ misc utilities
 import os, os.path
 import errno
 from urllib.parse import urlparse
+import hashlib
 
 def find_config_file(startdir, filname):
     """recurse in folder and parents to find filname and open it"""
@@ -37,3 +38,12 @@ def s3_split_url(objecturl):
         keyname = keyname[1:]
 
     return bucketname, keyname
+
+def canonical_hash(canon, algo='sha1'):
+    """
+    hash a canonical dictionary representation into a hexdigest
+    """
+    serialized = json.dumps(canon, sort_keys=True, separators=(",",  ":")).encode('utf-8')
+    digest_obj = getattr(hashlib, algo)()
+    digest_obj.update(serialized)
+    return "%s_%s" % (algo, digest_obj.hexdigest())

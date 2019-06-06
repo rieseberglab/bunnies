@@ -12,7 +12,7 @@ def lambda_handler(event, context):
     print("value2 = " + event['key2'])
     print("value3 = " + event['key3'])
     print("os.environ", os.environ)
-    
+
     ecs = boto3.client('ecs')
     resp = ecs.run_task(**{
         'taskDefinition': "align-task",
@@ -34,10 +34,11 @@ def lambda_handler(event, context):
         'networkConfiguration': {
             'awsvpcConfiguration': {
                 'subnets': [bunnies.config['subnet_id']],
-                'assignPublicIp': 'ENABLED' # FIXME Despite the vpc having an internet gateway, ENABLED is necessary for the ECS agent to pull the docker image.
+                # FIXME Despite the vpc having an internet gateway,
+                # ENABLED is necessary for the ECS agent to pull the docker image.
+                'assignPublicIp': 'ENABLED'
             }
         }
     })
     print(resp)
     return event['key1']  # Echo back the first key value
-    #raise Exception('Something went wrong')

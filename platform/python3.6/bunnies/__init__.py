@@ -12,6 +12,7 @@ from . import exc
 from . import utils
 from . import constants
 from .graph import S3Blob, Transform
+from .pipeline import build_target
 
 logger = logging.getLogger(__package__)
 

@@ -4,13 +4,14 @@ An example reprod pipeline which aligns and merges samples
 """
 
 # framework
-import reprod
+import bunnies
 
 # experiment specific
 from snpcalling import InputFile, Align, Merge
 
 
-reference = InputFile("s3://reprod-example-bucket/HanXRQ.fasta")
+ref_xrq = InputFile("s3://reprod-example-bucket/HanXRQ.fasta")
+ref_xrq_idx = InputFile("s3://reprod-example-bucket/HanXRQ.fasta.fai")
 
 a1 = Align(
     sample_name="ANN0830",
@@ -39,12 +40,12 @@ all_merged = [merged_bam1, merged_bam2]
 
 # - fixates software versions and parameters
 # - creates graph of dependencies
-pipeline = reprod.build_target(all_merged)
+pipeline = bunnies.build_target(all_merged)
 
-reprod.export_pipeline("my_merge.json")
+pipeline.export_schedule("my_merge.json")
 
 # Assembled pipelines can be archived and distributed.
 # pipeline = reprod.import_pipeline("my_merge.json")
 
-# a URL where we can see details in the browser
-print(pipeline.url())
+# a URL where we can see details and progress in the browser
+print(pipeline.dashboard_url())
