@@ -132,7 +132,7 @@ setup(
     # Similar to `install_requires` above, these must be valid existing
     # projects.
     extras_require={  # Optional
-        'dev': ['pylint'],
+        'dev': ['pylint', 'flake8'],
         'lambda': ['requests', 'boto3==1.9.35'],
         'build': ['requests', 'boto3==1.9.35', 'awscli']
     },

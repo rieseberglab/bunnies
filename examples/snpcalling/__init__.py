@@ -2,14 +2,21 @@
 
 import bunnies
 
-def InputFile(url, description=""):
+
+def InputFile(url, desc="", digests=None):
+    """
+    Factory method to wrap various file URL forms into a Bunnies file
+    """
     if url.startswith("s3://"):
         return bunnies.S3Blob(url, desc=desc)
     else:
-        raise Exception("unknown input type: %s" % (url,))
+        return bunnies.ExternalFile(url, desc=desc, digests=digests)
+
 
 class Align(bunnies.Transform):
-
+    """
+    Align a paired-end fastq or sra file against a reference genome
+    """
     ALIGN_IMAGE = "rieseberglab:5-2.3.0"
     VERSION = "1"
 
@@ -20,7 +27,7 @@ class Align(bunnies.Transform):
     def __init__(self, sample_name=None, r1=None, r2=None, ref=None, ref_idx=None):
         super().__init__("align", version=self.VERSION, image=self.ALIGN_IMAGE)
 
-        if None in (sample_name, r1, ref, ref_index):
+        if None in (sample_name, r1, ref, ref_idx):
             raise Exception("invalid parameters for alignment")
 
         self.sample_name = sample_name
@@ -34,8 +41,9 @@ class Align(bunnies.Transform):
         self.add_input("ref", ref,  desc="reference fasta")
         self.add_input("ref_idx", ref_idx, desc="reference index")
 
-        self.params["lossy"] =  False
+        self.params["lossy"] = False
         self.params["sample_name"] = sample_name
+
 
 class Merge(bunnies.Transform):
     """
@@ -50,10 +58,10 @@ class Merge(bunnies.Transform):
     __slots__ = ("sample_name",)
 
     def __init__(self, sample_name, bams):
+        super().__init__("merge", version=self.VERSION, image=self.MERGE_IMAGE)
         self.sample_name = sample_name
         self.params["sample_name"] = sample_name
         if not bams:
             raise Exception("merging requires 1 or more inputs")
         for i, bam in enumerate(bams):
             self.add_input(i, bam, desc="aligned input #%d" % (i,))
-

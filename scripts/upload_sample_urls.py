@@ -9,7 +9,9 @@
    INPUTURL OUTPUTURL [md5:MD5URL]
 
 """
-import os, os.path, sys
+import os
+import os.path
+import sys
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed

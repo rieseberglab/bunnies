@@ -11,7 +11,7 @@ import errno
 from . import exc
 from . import utils
 from . import constants
-from .graph import S3Blob, Transform
+from .graph import S3Blob, Transform, ExternalFile
 from .pipeline import build_target
 
 logger = logging.getLogger(__package__)
@@ -36,7 +36,8 @@ def _load_config():
 
     search_for = (
         ("cluster", "cluster-settings.json"),
-        ("network", "network-settings.json")
+        ("network", "network-settings.json"),
+        ("storage", "storage-settings.json")
     )
 
     for name, target in search_for:
@@ -56,4 +57,3 @@ def _load_config():
 _load_config.cache = None
 
 config = _load_config()
-

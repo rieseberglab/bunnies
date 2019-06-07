@@ -3,12 +3,13 @@
 """
     Models for constructing a Bunnies pipeline
 """
-import boto3
-from . import utils
 from . import constants
+from . import utils
+
 
 class NotImpl(Exception):
     pass
+
 
 class Cacheable(object):
     def canonical(self):
@@ -19,37 +20,45 @@ class Cacheable(object):
         """
         raise NotImpl("Cacheable.canonical")
 
+
 class ExternalFile(Cacheable):
+    """An opaque handle to data with known digest(s)"""
     def __init__(self, url, desc=None, digests=None):
         self.url = url
         self.desc = desc
-        self.digests = {k:v for k,v in digests.items()} if digests else {}
+        self.digests = utils.parse_digests(digests) if digests else {}
         if not self.digests:
             raise Exception("at least one expected digest must be specified for external files")
 
     def canonical(self):
-        #FIXME let strategy pick appropriate name
+        # FIXME let strategy pick appropriate name
         hexdigest = self.digests['md5']
         return {"type": "blob",
                 "md5": hexdigest}
+
 
 class S3Blob(Cacheable):
     def __init__(self, url, desc=None):
         self.url = url
         self.desc = desc
 
-    def canonical(self):
-        bucketname, keyname = _s3_split_url(objecturl)
-        s3 = boto3.client('s3')
-        head_res = s3.head_object(Bucket=bucketname, Key=keyname)
+    def manifest(self):
+        meta = utils.get_blob_meta(self.url)
+        print(meta)
         pfx = constants.DIGEST_HEADER_PREFIX
-        head_digests = {key[len(pfx):]: val for key, val in head_res['Metadata'].items()
+        head_digests = {key[len(pfx):]: val for key, val in meta['Metadata'].items()
                         if key.startswith(pfx)}
 
-        #FIXME let strategy pick appropriate name
+        # FIXME let strategy pick appropriate name
         hexdigest = head_digests['md5']
         return {"type": "blob",
                 "md5": hexdigest}
+        return {"type": "blob",
+                "md5": hexdigest}
+
+    def canonical(self):
+        # same as the manifest
+        manifest = self.manifest()
 
 class Input(Cacheable):
     """Inputs draw a named edge in the dependency graph.
@@ -77,6 +86,9 @@ class Transform(Cacheable):
     """A transformation of inputs performed by a program,
        with the given parameters
     """
+
+    __slots__ = ("name", "desc", "version", "image", "inputs", "params")
+
     def __init__(self, name, version=None, image=None, desc=""):
         self.name = name
         self.desc = desc
@@ -124,6 +136,6 @@ class Transform(Cacheable):
             'version': self.version,
             'image': self.image,
             'params': self.params,
-            'inputs': {k: self.inputs[k].canonical(self) for k in self.inputs}
+            'inputs': {k: self.inputs[k].canonical() for k in self.inputs}
         }
         return obj

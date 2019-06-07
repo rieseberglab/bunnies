@@ -6,26 +6,32 @@
 from .graph import Cacheable, Transform
 from .utils import canonical_hash
 
+
 class PipelineException(Exception):
     pass
 
+
 class BuildNode(object):
-    __slots__ == ("data", "deps", "_uid")
+    __slots__ = ("data", "deps", "_uid")
+
     def __init__(self, data):
         self.data = data
-        self.deps = [] if not deps else [d for d in deps]
+        self.deps = []
+        self._uid = None
 
     @property
     def uid(self):
-        if self._uid: return self._uid
+        if self._uid:
+            return self._uid
         if isinstance(self.data, Cacheable):
             canon = self.data.canonical()
             str_canon = canonical_hash(canon)
             self._uid = str_canon
         else:
-            self._uid = id(self.data)
+            self._uid = self.data.__hash__()
 
         return self._uid
+
 
 class BuildGraph(object):
     """Traverse the pipeline graph and obtain a graph of data dependencies"""
@@ -47,11 +53,11 @@ class BuildGraph(object):
         if path is None:
             path = set()
 
-        if isinstance(list, obj):
+        if isinstance(obj, list):
             return [self._dealias(o, path=path) for o in obj]
-        if isinstance(dict, obj):
+        if isinstance(obj, dict):
             return {k:self._dealias(v, path=path) for k,v in obj.items()}
-        if isinstance(tuple, obj):
+        if isinstance(obj, tuple):
             return tuple([self._dealias(o, path=path) for o in obj])
 
         if not isinstance(obj, Cacheable):
@@ -68,13 +74,13 @@ class BuildGraph(object):
         path.remove(obj)
 
         build_node = BuildNode(obj)
-        dealiased = self.by_id.get(build_node.uid, None)
+        dealiased = self.by_uid.get(build_node.uid, None)
 
         if not dealiased:
             # first instance
             dealiased = build_node
             dealiased.deps = dealiased_deps
-            self.by_id[dealiased.uid] = dealiased
+            self.by_uid[dealiased.uid] = dealiased
 
         return dealiased
 

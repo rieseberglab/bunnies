@@ -4,42 +4,76 @@
    Data importer for Reproducible experiments.
 
    This program imports data from the web (as a URL) into S3.
+   It was designed to work against Nanuq file servers, but
+   it should cover most other HTTP urls.
 
+   Input:
+
+   event = {
+      "requests": [
+          {
+              "input": "http://...",
+              "digests": [["md5", "http://..."]],
+              "output": "s3://...",
+              "tmp_bucket": None,
+              "download_only": False
+          }
+      ]
+   }
+
+   Multiple files can be imported at once, as long
+   all transfers can be completed within the lambda
+   time limit. (900 seconds)
+
+   input: HTTP url to import
+   digests: list of [type, url] tuples to sumfiles
+   output: the final location for the uploaded file
+   download_only: when True, the final move is skipped. and details about the
+                  temporary files are returned. This allows another step to
+                  inspect the file before committing to the final location.
+                  (see rehash.py)
+   tmp_bucket: a bucket to place the temporary upload in. the default is to
+               use a temporary key prefix in the output bucket.
+
+   environment:
+
+      USERNAME  := nanuq username
+      PASSWORD  := nanuq password
+      TMP_BUCKET := name of a default temporary bucket to store uploads
+
+
+   output = {
+     "error_count": int,
+     "results": [
+         {"input": inputurl, "output": finaloutputurl, "digests": {"md5": ..., "sha1": ...}}, # ok result
+         {"input": inputurl, "output": outputurl, "error": "error message"}, ...
+     ]
+   }
+
+   results are returned in the same order as the requests
+   when download_only = True is given in a request, the temporary location is
+                        also included in the response:
+   {
+     "input": inurl, # input url from request
+     "output": tmp_url, # the temporary blob location
+     "move_to": outurl,  # where it should be moved if it validates
+     "ETag": the temporary file etag,
+     "Content-Type": content type,
+     "Content-Length": content length,
+     "digests": pipe_fp.hexdigests()
+   }
 """
 
 
-# For Lambdas:
-#   Multiple files can be imported at once, as long
-#   all transfers can be completed within the lambda
-#   time limit. (900 seconds)
-#
-#
-# Existing output files will not be overwriten.
-# event = {
-#     "requests": [
-#         {
-#             "input": "http://...",
-#             "digests": [["md5", "http://..."]],
-#             "output": "s3://..."
-#         }
-#     ]
-# }
-#
-# output = {
-#     "error_count": int,
-#     "results": [
-#        {"input": inputurl, "output": finaloutputurl, "digests": {"md5": ..., "sha1": ...}}, # ok result
-#        {"input": inputurl, "output": outputurl, "error": "error message"}, ...
-#     ]
-# }
-
-
-import boto3, botocore
+import boto3
+import botocore
 from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 
 import json
-import os, sys, io
+import os
+import sys
+import io
 import requests
 import logging
 import uuid
@@ -401,7 +435,20 @@ def _digest_from_sum_url(digest_url, entry_name, creds=None, logprefix=""):
     """
     assumes the URL is a digest file (md5sum, sha1sum, etc).
     reads the first 5 MBs. finds the entry, returns the digest
+
+    Other supported syntaxes:
+    hash://sha256/9f86d081884c7d659a2feaa0?name=foo.zip#dummy   (Hash scheme: Host is the type. First path component is digest.)
+    hash://md5/9f86d081884c7d659a/foo.zip
+    md5:9f86d081884c7d659a
     """
+    parsed = urlparse(digest_url)
+    if parsed.scheme == "hash":
+        # hash://md5/asdsadada
+        return parsed.path[1:].lower()
+    elif parsed.scheme in ('md5', 'sha1', 'sha256'):
+        # md5:babababababababa
+        return parsed.path
+
     headers, inputfd = _get(digest_url, creds=creds, logprefix=logprefix)
     text = inputfd.read(5*1024*1024).decode('utf-8')
     inputfd.close()
@@ -421,8 +468,6 @@ def _digest_from_sum_url(digest_url, entry_name, creds=None, logprefix=""):
 
 def _get_source_digest(digest_url, digest_type, entry_name, creds=None, logprefix=""):
     log.info("%s fetching %s digest for name %s...", logprefix, digest_type, entry_name)
-
-    # TODO -- support hash://md5:asdasddsa/ URLs
 
     hexdigest = _digest_from_sum_url(digest_url, entry_name, creds=creds,
                                      logprefix=logprefix.rstrip() + "." + digest_type + " ")
@@ -464,7 +509,7 @@ def _match_existing(s3url, expected_digests, expected_len, expected_ct, logprefi
             "Content-Length": head_res['ContentLength'],
             "digests": head_digests}
 
-def _handle_request_full(req, creds=None, tmp_bucket=None, logprefix=""):
+def _handle_request_full(req, creds=None, logprefix=""):
     """do the work for one url/digesturl combo"""
 
     logprefix=logprefix or ""
@@ -472,6 +517,7 @@ def _handle_request_full(req, creds=None, tmp_bucket=None, logprefix=""):
 
     inurl = req["input"]
     outurl = req["output"]
+    tmp_bucket = os.environ.get('TMPBUCKET', None)
     tmp_bucket = req.get("tmp_bucket", tmp_bucket)
 
     out_parsed = urlparse(outurl)
@@ -487,7 +533,7 @@ def _handle_request_full(req, creds=None, tmp_bucket=None, logprefix=""):
 
     # if outurl is a key prefix (directory), append input basename to it.
     out_bucket = out_parsed.netloc
-    if out_parsed.path.endswith("/"):
+    if out_parsed.path.endswith("/") or out_parsed.path == "":
         outurl = os.path.join(outurl, os.path.split(in_parsed.path)[1])
 
 
@@ -584,7 +630,7 @@ def _handle_request_full(req, creds=None, tmp_bucket=None, logprefix=""):
             "Content-Type": in_ct,
             "Content-Length": xfer_cl,
             "digests": pipe_fp.hexdigests()
-        } 
+        }
     try:
         # store digests in final location metadata
         meta = {}
@@ -606,7 +652,7 @@ def _handle_request_full(req, creds=None, tmp_bucket=None, logprefix=""):
     finally:
         _s3_delete(tmp_url, logprefix=logprefix)
 
-def handle_request(request, creds=None, tmp_bucket=None, logprefix=""):
+def handle_request(request, creds=None, logprefix=""):
     """
     returns the result of handling one request
 
@@ -627,7 +673,7 @@ def handle_request(request, creds=None, tmp_bucket=None, logprefix=""):
         if digest_typ not in ("md5",):
             return {"error": "unrecognized digest type: %s" % (digest_typ,)}
     try:
-        return _handle_request_full(request, creds=creds, tmp_bucket=tmp_bucket, logprefix=logprefix)
+        return _handle_request_full(request, creds=creds, logprefix=logprefix)
     except ImportError as ie:
         return {"input": input_url, "output": output_url, "error": str(ie)}
 
@@ -641,10 +687,8 @@ def lambda_handler(event, context):
     creds = {}
     creds['username'] = os.environ.get('USERNAME', '')
     creds['password'] = os.environ.get('PASSWORD', '')
-    tmp_bucket = os.environ.get('TMPBUCKET', None)
-    tmp_bucket = event.get("TMPBUCKET", tmp_bucket)
 
-    results = [ handle_request(req, creds=creds, tmp_bucket=tmp_bucket, logprefix="%03d" % i) for i, req in enumerate(requests) ]
+    results = [ handle_request(req, creds=creds, logprefix="%03d" % i) for i, req in enumerate(requests) ]
     error_count = len([r for r in results if "error" in r])
     return {
         'error_count': error_count,
@@ -694,13 +738,14 @@ def main_handler():
         digests.append(("md5", args.md5url))
 
     request = {
+        "tmp_bucket": tmp_bucket,
         "input": args.url,
         "output": args.outputurl,
         "digests": digests
     }
 
     requests = [request]
-    results = [ handle_request(req, creds=creds, tmp_bucket=tmp_bucket, logprefix="%03d" % i) for i, req in enumerate(requests) ]
+    results = [ handle_request(req, creds=creds, logprefix="%03d" % i) for i, req in enumerate(requests) ]
     error_count = len([r for r in results if "error" in r])
 
     json.dump({"results": results, "error_count": error_count}, sys.stdout, sort_keys=True, indent=4, separators=(',', ': '))
