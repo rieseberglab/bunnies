@@ -10,9 +10,13 @@ import hashlib
 import json
 import logging
 import boto3
+import base64
+
 from botocore.exceptions import ClientError
 from .exc import NoSuchFile
+
 logger = logging.getLogger(__package__)
+
 
 def find_config_file(startdir, filname):
     """recurse in folder and parents to find filname and open it"""
@@ -83,7 +87,7 @@ def parse_digests(digests):
       1) "d41d8cd98f00b204e9800998ecf8427e"
       2) "md5:d41d8cd98f00b204e9800998ecf8427e"
       3) "md5_d41d8cd98f00b204e9800998ecf8427e"
-
+      4) "hash://md5/d41d8cd98f00b204e9800998ecf8427e"
       algorithmic prefixes are ignored. algorithm
       deduced from hexdigest length
 
@@ -91,6 +95,8 @@ def parse_digests(digests):
     """
     def _atom(orig):
         s = orig
+        if s.startswith("hash://"):
+            s = os.path.split(s[7:])[1]
         if ':' in s:
             # e.g. "md5:asdaddas"
             s = s.split(':')[-1]
@@ -109,3 +115,10 @@ def parse_digests(digests):
     if not isinstance(digests, (tuple, list)):
         digests = (digests,)
     return dict([_atom(digest) for digest in digests])
+
+
+def hex2b64(hexstr):
+    if len(hexstr) % 2 != 0:
+        raise ValueError("Invalid hexstring")
+    hexbits = bytes([(int(hexstr[i], 16) << 4) + int(hexstr[i+1], 16) for i in range(0, len(hexstr), 2)])
+    return base64.b64encode(hexbits).decode('ascii')

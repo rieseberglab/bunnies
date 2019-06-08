@@ -39,13 +39,13 @@ or (in case of an error)
 
 import boto3
 import hashlib
-import helpers
 import concurrent.futures
 import time
 import logging
 
-META_PREFIX = "" # in boto you don't give x-amz-meta-
-DIGEST_HEADER = META_PREFIX + "digest-" # + algo.lowercase()
+from bunnies import transfers, constants
+
+DIGEST_HEADER = constants.DIGEST_HEADER_PREFIX
 MB = 1024*1024
 DEFAULT_CHUNK_SIZE = 16*MB
 
@@ -122,14 +122,14 @@ def lambda_handler(event, context):
     # GET OBJECT
     resp = client.get_object(Bucket=src_bucket, Key=src_key, IfMatch=orig_etag)
 
-    progress = helpers.ProgressPercentage(size=resp['ContentLength'], logger=log)
+    progress = transfers.ProgressPercentage(size=resp['ContentLength'], logger=log)
     chunk_size = int(event.get("chunk_size", "0"), 10)
     if chunk_size <= 0:
         chunk_size = DEFAULT_CHUNK_SIZE
 
-    chunk_iter = helpers.yield_in_chunks(resp['Body'], chunk_size)
+    chunk_iter = transfers.yield_in_chunks(resp['Body'], chunk_size)
 
-    hashers = {algo: getattr(hashlib, algo)()  for algo in pending}
+    hashers = {algo: getattr(hashlib, algo)() for algo in pending}
 
     def _update_hash(algo, hasher, chunk):
         hasher.update(chunk)

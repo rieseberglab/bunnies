@@ -32,11 +32,13 @@ PLATFORM_PKG = "bunnies"
 PLATFORM_SRC = os.path.join(REPO_ROOT, "platform", "python3.6")
 
 PLATFORM_EXTRA = [
-    {"src": os.path.join(REPO_ROOT, "network-settings.json"),
-     "dst": os.path.join(PLATFORM_PKG, "network-settings.json")},
-    {"src": os.path.join(REPO_ROOT, "cluster-settings.json"),
-     "dst": os.path.join(PLATFORM_PKG, "cluster-settings.json")}
+    {"src": os.path.join(REPO_ROOT, json_settings),
+     "dst": os.path.join(PLATFORM_PKG, json_settings)}
+    for json_settings in ("storage-settings.json",
+                          "network-settings.json",
+                          "cluster-settings.json")
 ]
+
 
 def setup_logging():
     root = logging.getLogger()

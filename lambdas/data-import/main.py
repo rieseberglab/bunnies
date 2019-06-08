@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 """
-   Data importer for Reproducible experiments.
+   Lambda data importer
 
    This program imports data from the web (as a URL) into S3.
    It was designed to work against Nanuq file servers, but
-   it should cover most other HTTP urls.
+   it should also cover most other HTTP urls.
 
    Input:
 
@@ -73,27 +73,21 @@ from botocore.exceptions import ClientError
 import json
 import os
 import sys
-import io
 import requests
 import logging
 import uuid
-import hashlib
-import base64
 import time
 from urllib.parse import urlparse
 
 import bunnies
+from bunnies import utils
+from bunnies import transfers
 
-from helpers import ProgressPercentage, HashingReader, yield_in_chunks, hex2b64
-
-MB = 1024 * 1024
-MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
-UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 6*MB
 DEFAULT_OUTPUT_HASHES = {} # {"md5": True, "sha1": True}
 
-# https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3.html
-DIGEST_HEADER = bunnies.constants.DIGEST_HEADER_PREFIX # + algoname
-IMPORT_DIGESTS_HEADER = "import-digests"
+DIGEST_HEADER = bunnies.constants.DIGEST_HEADER_PREFIX  # + algoname
+IMPORT_DIGESTS_HEADER = bunnies.constants.IMPORT_DIGESTS_HEADER
+
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
@@ -107,13 +101,16 @@ def setup_logging(loglevel=logging.INFO):
     root.addHandler(ch)
     root.propagate = False
 
+
 setup_logging(logging.DEBUG)
 log = logging.getLogger(__name__)
 
 log.info("Running boto3:%s botocore:%s", boto3.__version__, botocore.__version__)
 
+
 class ImportError(Exception):
     pass
+
 
 def _url_type(url):
     o = urlparse(url)
@@ -126,6 +123,7 @@ def _url_type(url):
     else:
         # not handled
         return None
+
 
 def _nanuq_get(url, username="", password="", logprefix=""):
     """returns an open request object to a NANUQ download"""
@@ -162,6 +160,7 @@ def _nanuq_get(url, username="", password="", logprefix=""):
     log.info("%s  content-length %s  content-type %s", logprefix, content_length, content_type)
     return (r.headers, r.raw)
 
+
 def _s3_get(url, logprefix="", **kwargs):
     o = urlparse(url)
     bucketname = o.netloc
@@ -174,6 +173,7 @@ def _s3_get(url, logprefix="", **kwargs):
     except ClientError as clierr:
         log.error("%sdownload error", logprefix, exc_info=clierr)
         raise ImportError("Error for URL %s: %s" % (url, clierr.response['Error']['Code']))
+
 
 def _http_get(url, logprefix="", **kwargs):
     """http or https GET"""
@@ -191,6 +191,7 @@ def _http_get(url, logprefix="", **kwargs):
     log.info("%s  content-Length %s  content-type %s", logprefix, content_length, r.headers.get('content-type', "n/a"))
     return (r.headers, r.raw)
 
+
 def _get(url, creds=None, logprefix=""):
     """returns an open request handle to a file"""
     url_type = _url_type(url)
@@ -207,39 +208,24 @@ def _get(url, creds=None, logprefix=""):
     else:
         raise ImportError("Url has unsupported backend: %s" % (url,))
 
-def _s3_split_url(objecturl):
-    """splits an s3://foo/bar/baz url into bucketname, keyname: ("foo", "bar/baz")
-
-    the keyname may be empty
-    """
-    o = urlparse(objecturl)
-    if o.scheme != "s3":
-        raise ValueError("not an s3 url")
-
-    keyname = o.path
-    bucketname = o.netloc
-
-    # all URL paths start with /. strip it.
-    if keyname.startswith("/"):
-        keyname = keyname[1:]
-
-    return bucketname, keyname
 
 def _s3_delete(objecturl, logprefix=""):
-    bucketname, keyname = _s3_split_url(objecturl)
+    bucketname, keyname = utils.s3_split_url(objecturl)
     s3 = boto3.client('s3')
     log.info("%s S3-DELETE bucket:%s key:%s", logprefix, bucketname, keyname)
     return s3.delete_object(Bucket=bucketname, Key=keyname)
 
+
 def _s3_head(objecturl, logprefix=""):
-    bucketname, keyname = _s3_split_url(objecturl)
+    bucketname, keyname = utils.s3_split_url(objecturl)
     s3 = boto3.client('s3')
     log.info("%s S3-HEAD bucket:%s key:%s", logprefix, bucketname, keyname)
     return s3.head_object(Bucket=bucketname, Key=keyname)
 
+
 def _s3_copy(srcurl, dsturl, content_type=None, meta=None, etag_match=None, logprefix=""):
-    src_bucketname, src_keyname = _s3_split_url(srcurl)
-    dst_bucketname, dst_keyname = _s3_split_url(dsturl)
+    src_bucketname, src_keyname = utils.s3_split_url(srcurl)
+    dst_bucketname, dst_keyname = utils.s3_split_url(dsturl)
 
     s3 = boto3.client('s3')
     log.info("%s S3-COPY bucket:%s key:%s => bucket:%s key:%s", logprefix,
@@ -262,140 +248,13 @@ def _s3_copy(srcurl, dsturl, content_type=None, meta=None, etag_match=None, logp
               result['CopyObjectResult']['ETag'])
     return result
 
-def _s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_length=None, content_md5=None, meta=None, logprefix=""):
-    """
-    Upload the inputfile (stream) using a single PUT operation
-
-    you must specify content_length, and content_md5 (hexdigest)
-    """
-    bucketname, keyname = _s3_split_url(outputurl)
-    if not keyname:
-        log.error("%s empty key given", logprefix)
-        raise ImportError("empty key given")
-
-
-    if content_length < 0 or content_length is None or content_length > MAX_SINGLE_UPLOAD_SIZE:
-        raise ImportError("Content length must be known and between 5MiB and 5GiB")
-
-    if content_md5 is None:
-        raise ImportError("Content-MD5 must be known to do simple streaming uploads.")
-
-    meta = meta or {}
-
-    s3 = boto3.client('s3')
-
-    base64_md5 = hex2b64(content_md5)
-
-    extra_args = {
-        'ContentType': content_type or 'application/octet-stream',
-        'ContentMD5': base64_md5,
-        'ContentLength': content_length,
-        'Metadata': {}
-    }
-
-    if meta:
-        extra_args['Metadata'].update(meta)
-
-    log.info("%s S3-PutObject bucket:%s key:%s extra:%s",
-              logprefix, bucketname, keyname, extra_args)
-
-    try:
-        completed = s3.put_object(Bucket=bucketname, Key=keyname,
-                                  Body=inputfp,
-                                  **extra_args)
-        log.info("%s completed simple streaming upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname, completed['ETag'])
-        return completed
-
-    except ClientError as clierr:
-        log.error("%s client error: %s", logprefix, str(clierr))
-        raise ImportError("error in upload to bucket:%s key:%s: %s" %
-                          (bucketname, keyname, clierr.response['Error']['Code']))
-
-def _s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None, logprefix=""):
-    """
-    Upload the inputfile using a multipart approach.
-    """
-    bucketname, keyname = _s3_split_url(outputurl)
-    if not keyname:
-        log.error("%s empty key given", logprefix)
-        raise ImportError("empty key given")
-
-    meta = meta or {}
-
-    s3 = boto3.client('s3')
-    progress = ProgressPercentage(size=content_length, logprefix=logprefix, logger=log)
-
-    extra_args = {
-        'ContentType': content_type or 'application/octet-stream',
-        'Metadata': {}
-    }
-
-    if meta:
-        extra_args['Metadata'].update(meta)
-
-    log.info("%s S3-PutObject multipart bucket:%s key:%s extra:%s",
-              logprefix, bucketname, keyname, extra_args)
-
-    mpart = None
-    try:
-        mpart = s3.create_multipart_upload(Bucket=bucketname, Key=keyname,
-                                           **extra_args)
-        parts = []
-        partnumber = 0
-        progress(0)
-
-        chunk_iter = yield_in_chunks(inputfp, UPLOAD_CHUNK_SIZE)
-        chunkfp = None
-
-        for chunk in chunk_iter:
-            partnumber += 1
-
-            chunklen = len(chunk)
-            chunkdigest = hashlib.md5(chunk).digest()
-            chunkfp = io.BytesIO(chunk)
-            chunk = None
-
-            base64_md5 = base64.b64encode(chunkdigest).decode('ascii')
-            part_res = s3.upload_part(Body=chunkfp, Bucket=bucketname, Key=keyname,
-                                      ContentLength=chunklen,
-                                      ContentMD5=base64_md5,
-                                      PartNumber=partnumber,
-                                      UploadId=mpart['UploadId'])
-            chunkfp.close()
-            chunkfp = None
-            parts.append((partnumber, part_res['ETag']))
-
-            progress(chunklen)
-        del chunk_iter
-
-        # finish it
-        log.info("%s completing multipart upload bucket:%s key:%s ...", logprefix, bucketname, keyname)
-        completed = s3.complete_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'],
-                                                 MultipartUpload={
-                                                     'Parts': [ {'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts ]
-                                                 })
-        mpart = None
-        log.info("%s completed multipart upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname, completed['ETag'])
-        return completed
-
-    except ClientError as clierr:
-        log.error("%s client error: %s", logprefix, str(clierr))
-        raise ImportError("error in upload to bucket:%s key:%s: %s" %
-                          (bucketname, keyname, clierr.response['Error']['Code']))
-    finally:
-        if mpart:
-            try:
-                s3.abort_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'])
-                log.info("%s multipart upload aborted.", logprefix)
-            except Exception as exc:
-                log.error("%s could not abort multipart upload:", logprefix, exc_info=exc)
 
 def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None, logprefix=""):
     """Store the input fileobject under key outputurl
 
     returns nothing.
     """
-    bucketname, keyname = _s3_split_url(outputurl)
+    bucketname, keyname = utils.s3_split_url(outputurl)
     if not keyname:
         log.error("%s empty key given", logprefix)
         raise ImportError("empty key given")
@@ -404,7 +263,7 @@ def _s3_put(inputfp, outputurl, content_type=None, content_length=-1, meta=None,
 
     s3 = boto3.client('s3')
     config = TransferConfig(use_threads=False, max_concurrency=1)
-    progress = ProgressPercentage(size=content_length, logprefix=logprefix, logger=log)
+    progress = transfers.ProgressPercentage(size=content_length, logprefix=logprefix, logger=log)
 
     extra_args = {
         'ContentType': content_type or 'application/octet-stream',
@@ -466,6 +325,7 @@ def _digest_from_sum_url(digest_url, entry_name, creds=None, logprefix=""):
             return hexdigest
     return None
 
+
 def _get_source_digest(digest_url, digest_type, entry_name, creds=None, logprefix=""):
     log.info("%s fetching %s digest for name %s...", logprefix, digest_type, entry_name)
 
@@ -475,6 +335,7 @@ def _get_source_digest(digest_url, digest_type, entry_name, creds=None, logprefi
         raise ImportError("cannot find %s digest for file %s" % (digest_type, entry_name))
     log.info("%s found digest: %s %s %s", logprefix, digest_type, entry_name, hexdigest)
     return hexdigest
+
 
 def _match_existing(s3url, expected_digests, expected_len, expected_ct, logprefix=""):
     """
@@ -509,6 +370,7 @@ def _match_existing(s3url, expected_digests, expected_len, expected_ct, logprefi
             "Content-Length": head_res['ContentLength'],
             "digests": head_digests}
 
+
 def _handle_request_full(req, creds=None, logprefix=""):
     """do the work for one url/digesturl combo"""
 
@@ -535,7 +397,6 @@ def _handle_request_full(req, creds=None, logprefix=""):
     out_bucket = out_parsed.netloc
     if out_parsed.path.endswith("/") or out_parsed.path == "":
         outurl = os.path.join(outurl, os.path.split(in_parsed.path)[1])
-
 
     in_headers, in_fp = _get(inurl, creds=creds, logprefix=logprefix)
     in_ct = in_headers.get('Content-Type')
@@ -574,21 +435,19 @@ def _handle_request_full(req, creds=None, logprefix=""):
         import_checks = ",".join(input_digests.keys())
 
         start_time = time.time()
-        pipe_fp = HashingReader(in_fp, algorithms=output_hashes.keys())
+        pipe_fp = transfers.HashingReader(in_fp, algorithms=output_hashes.keys())
 
-        upload_result = _s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
-                                          meta={IMPORT_DIGESTS_HEADER: import_checks}, logprefix=logprefix)
+        transfers.s3_streaming_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl,
+                                   meta={IMPORT_DIGESTS_HEADER: import_checks}, logprefix=logprefix)
 
         # # from file
-        # pipe_fp = HashingReader(in_fp, algorithms=())#output_hashes.keys())
+        # pipe_fp = transfers.HashingReader(in_fp, algorithms=())#output_hashes.keys())
         # _s3_put(pipe_fp, tmp_url, content_type=in_ct, content_length=in_cl, logprefix=logprefix)
 
         delta_t = time.time() - start_time
         xfer_cl = pipe_fp.tell()
         log.info("%s PUT completed in %8.3f seconds. (%8.3f MB/s)", logprefix,
                  delta_t, xfer_cl / (1024*1024*(delta_t+0.00001)))
-
-        #log.debug("%s new file result: %s", logprefix, upload_result)
     finally:
         if pipe_fp: pipe_fp.close()
 
@@ -652,6 +511,7 @@ def _handle_request_full(req, creds=None, logprefix=""):
     finally:
         _s3_delete(tmp_url, logprefix=logprefix)
 
+
 def handle_request(request, creds=None, logprefix=""):
     """
     returns the result of handling one request
@@ -667,7 +527,7 @@ def handle_request(request, creds=None, logprefix=""):
     for digest_type, digest_url in input_digests:
         log.info("%s [REQ] input digest %s: %s", logprefix, digest_type, digest_url)
     log.info("%s [REQ] output: %s", logprefix, output_url)
-    log.info("%s [REQ] chunk_size: %s", logprefix, UPLOAD_CHUNK_SIZE)
+    log.info("%s [REQ] chunk_size: %s", logprefix, bunnies.constants.UPLOAD_CHUNK_SIZE)
 
     for digest_typ, _ in input_digests:
         if digest_typ not in ("md5",):
@@ -676,6 +536,7 @@ def handle_request(request, creds=None, logprefix=""):
         return _handle_request_full(request, creds=creds, logprefix=logprefix)
     except ImportError as ie:
         return {"input": input_url, "output": output_url, "error": str(ie)}
+
 
 def lambda_handler(event, context):
     """lambda entry point"""
@@ -694,6 +555,7 @@ def lambda_handler(event, context):
         'error_count': error_count,
         'results': results
     }
+
 
 def main_handler():
     """do the work. CLI"""

@@ -14,7 +14,7 @@ import json
 import logging
 import base64
 import io
-from . import setup_logging
+
 log = logging.getLogger(__package__)
 
 DATA_IMPORT = "data-import"
