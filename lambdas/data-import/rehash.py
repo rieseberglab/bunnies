@@ -5,6 +5,12 @@
    This program computes hashes on an s3 key, and moves/updates the
    metadata to include the discovered hashes.
 
+   In the digests parameter, set the known digests for the object.
+   They will be verified before committing the input key to the
+   output key name. You may also set additional digest keys to null,
+   if you also want them computed. The final digests will be written
+   in the response, and in the final object's metadata.
+
 {
   "src_bucket": "bar",
   "src_key":   "foo",
@@ -34,6 +40,7 @@ or (in case of an error)
 {
   "error": "error message"
 }
+
 """
 
 
