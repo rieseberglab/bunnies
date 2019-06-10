@@ -33,6 +33,13 @@ def find_config_file(startdir, filname):
     return find_config_file(parent, filname)
 
 
+def user_region():
+    """get the effective profile's region"""
+    # follow up: https://stackoverflow.com/questions/56502789/obtaining-the-boto3-profile-settings-from-python/56502829#56502829
+    session = boto3.session.Session()
+    return session.region_name
+
+
 def s3_split_url(objecturl):
     """splits an s3://foo/bar/baz url into bucketname, keyname: ("foo", "bar/baz")
 
@@ -52,15 +59,16 @@ def s3_split_url(objecturl):
     return bucketname, keyname
 
 
-def get_blob_meta(objecturl):
+def get_blob_meta(objecturl, logprefix=""):
     """fetches metadata about the given object"""
     bucketname, keyname = s3_split_url(objecturl)
-    logger.info("fetching meta for URL: %s", objecturl)
+    logprefix = logprefix + " " if logprefix else logprefix
+    logger.info("%sfetching meta for URL: %s", logprefix, objecturl)
     s3 = boto3.client('s3')
     try:
         head_res = s3.head_object(Bucket=bucketname, Key=keyname)
     except ClientError as clierr:
-        logger.error("could not fetch URL (%s): %s", repr(clierr.response['Error']['Code']), objecturl,
+        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
                      exc_info=clierr)
         if clierr.response['Error']['Code'] == '404':
             raise NoSuchFile(objecturl)
@@ -68,11 +76,11 @@ def get_blob_meta(objecturl):
     return head_res
 
 
-def canonical_hash(canon, algo='sha1'):
+def canonical_hash(canon_obj, algo='sha1'):
     """
     hash a canonical dictionary representation into a hexdigest
     """
-    serialized = json.dumps(canon, sort_keys=True, separators=(",",  ":")).encode('utf-8')
+    serialized = json.dumps(canon_obj, sort_keys=True, separators=(",",  ":")).encode('utf-8')
     digest_obj = getattr(hashlib, algo)()
     digest_obj.update(serialized)
     return "%s_%s" % (algo, digest_obj.hexdigest())
