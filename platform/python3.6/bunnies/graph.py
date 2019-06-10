@@ -38,23 +38,25 @@ class ExternalFile(Cacheable):
 
 
 class S3Blob(Cacheable):
+    __slots__ = ("url", "desc", "_manifest")
+
     def __init__(self, url, desc=None):
         self.url = url
         self.desc = desc
+        self._manifest = None
 
     def manifest(self):
-        meta = utils.get_blob_meta(self.url)
-        print(meta)
-        pfx = constants.DIGEST_HEADER_PREFIX
-        head_digests = {key[len(pfx):]: val for key, val in meta['Metadata'].items()
-                        if key.startswith(pfx)}
+        if not self._manifest:
+            meta = utils.get_blob_meta(self.url)
+            pfx = constants.DIGEST_HEADER_PREFIX
+            head_digests = {key[len(pfx):]: val for key, val in meta['Metadata'].items()
+                            if key.startswith(pfx)}
 
-        # FIXME let strategy pick appropriate name
-        hexdigest = head_digests['md5']
-        return {"type": "blob",
-                "md5": hexdigest}
-        return {"type": "blob",
-                "md5": hexdigest}
+            # FIXME let strategy pick appropriate name
+            hexdigest = head_digests['md5']
+            self._manifest = {"type": "blob",
+                              "md5": hexdigest}
+        return self._manifest
 
     def canonical(self):
         # same as the manifest

@@ -56,7 +56,7 @@ class BuildGraph(object):
         if isinstance(obj, list):
             return [self._dealias(o, path=path) for o in obj]
         if isinstance(obj, dict):
-            return {k:self._dealias(v, path=path) for k,v in obj.items()}
+            return {k: self._dealias(v, path=path) for k, v in obj.items()}
         if isinstance(obj, tuple):
             return tuple([self._dealias(o, path=path) for o in obj])
 
@@ -68,9 +68,14 @@ class BuildGraph(object):
             raise PipelineException("Cycle in dependency graph detected: %s", path)
 
         path.add(obj)
+
+        # fixme modularity -- need a "getDeps" interface
         if isinstance(obj, Transform):
             # recurse
             dealiased_deps = [self._dealias(obj.inputs[k], path=path) for k in obj.inputs]
+        else:
+            dealiased_deps = []
+
         path.remove(obj)
 
         build_node = BuildNode(obj)
@@ -91,6 +96,7 @@ class BuildGraph(object):
         all_targets = self.targets + self._dealias(targets)
         self.targets[:] = [x for x in set(all_targets)]
 
+
 def build_target(roots):
     """
     Construct a pipeline execution schedule from a graph of
@@ -104,4 +110,3 @@ def build_target(roots):
     build_graph.add_targets(roots)
 
     return build_graph
-
