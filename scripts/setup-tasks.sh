@@ -46,7 +46,8 @@ function output_settings ()
 }"
 }
 
-output_settings | tee "${OUTFILE}"
+output_settings | tee "${OUTFILE}".tmp
+mv "${OUTFILE}.tmp" "${OUTFILE}"
 
 # create test task definition for align container
 

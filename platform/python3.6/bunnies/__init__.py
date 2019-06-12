@@ -12,6 +12,7 @@ from .config import config
 from . import exc
 from . import utils
 from . import constants
+from . import execute
 
 from .graph import S3Blob, Transform, ExternalFile
 from .pipeline import build_target

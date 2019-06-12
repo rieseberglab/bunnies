@@ -53,10 +53,26 @@ all_merged = [merged_bam1, merged_bam2]
 # - creates graph of dependencies
 pipeline = bunnies.build_target(all_merged)
 
-pipeline.export_schedule("my_merge.json")
+# pipeline.export_schedule("my_merge.json")
 
 # Assembled pipelines can be archived and distributed.
 # pipeline = reprod.import_pipeline("my_merge.json")
 
 # a URL where we can see details and progress in the browser
-print(pipeline.dashboard_url())
+# print(pipeline.dashboard_url())
+
+task_resp = bunnies.execute.ecs_run_task("align-task", {
+    "containerOverrides": [
+        {
+            'name': 'main',  # name of container config to override. from task definition.
+            'environment': [
+                {
+                    'name': "JOBSPEC",
+                    'value': "TEST LAUNCH"
+                }
+            ],
+        }
+    ]
+})
+
+print(task_resp)

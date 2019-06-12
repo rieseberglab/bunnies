@@ -3,8 +3,8 @@
     "networkMode": "awsvpc",
     "containerDefinitions": [
 	{
-	    "name": "aligner",
-	    "image": "458136422280.dkr.ecr.ca-central-1.amazonaws.com/align:1",
+	    "name": "main",
+	    "image": "rieseberglab/analytics:5-2.3.0",
 	    "logConfiguration": {
 		"logDriver": "awslogs",
 		"options": {
