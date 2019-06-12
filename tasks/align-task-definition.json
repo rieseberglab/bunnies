@@ -4,7 +4,7 @@
     "containerDefinitions": [
 	{
 	    "name": "main",
-	    "image": "rieseberglab/analytics:5-2.3.0",
+	    "image": "rieseberglab/analytics:5-2.3.2",
 	    "logConfiguration": {
 		"logDriver": "awslogs",
 		"options": {

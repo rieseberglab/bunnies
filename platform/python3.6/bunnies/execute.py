@@ -12,7 +12,7 @@ def ecs_describe_tasks(tasks):
     return ecs.describe_tasks(cluster=cluster, tasks=tasks)
 
 
-def ecs_task_run(task_name, overrides=None):
+def ecs_run_task(task_name, overrides=None):
     """
     Run an ECS task of the given name, overriding
     settings of one or more containers using `overrides`
