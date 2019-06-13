@@ -12,6 +12,18 @@ def ecs_describe_tasks(tasks):
     return ecs.describe_tasks(cluster=cluster, tasks=tasks)
 
 
+def ecs_wait_for_tasks(tasks):
+    if not isinstance(tasks, (list, tuple)):
+        tasks = [tasks]
+
+    ecs = boto3.client('ecs')
+    cluster = config['cluster_arn']
+    waiter = ecs.get_waiter('tasks_stopped')
+    waiter.wait(cluster=cluster, tasks=tasks, WaiterConfig={
+        'Delay': 6,
+        'MaxAttempts': 500})
+
+
 def ecs_run_task(task_name, overrides=None):
     """
     Run an ECS task of the given name, overriding

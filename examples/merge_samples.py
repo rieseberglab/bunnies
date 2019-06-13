@@ -75,4 +75,7 @@ task_resp = bunnies.execute.ecs_run_task("align-task", {
     ]
 })
 
+
 print(task_resp)
+
+bunnies.execute.ecs_wait_for_tasks([task_resp])
