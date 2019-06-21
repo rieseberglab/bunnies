@@ -32,11 +32,31 @@ function ensure_repo ()
 
 trap do_cleanup EXIT
 
+# AMI
+# apt-get install -y libreadline7
+# sudo ln -s /lib/x86_64-linux-gnu/libreadline.so.{7,6}
+#
 # Lustre should only be installed in containers if they can be made privileged.
 # https://docs.aws.amazon.com/fsx/latest/LustreGuide/install-lustre-client.html
 #
 # ADD https://downloads.whamcloud.com/public/lustre/lustre-2.10.6/ubuntu1604/client/lustre-client-modules-4.4.0-131-generic_2.10.6-1_amd64.deb \
 #     https://downloads.whamcloud.com/public/lustre/lustre-2.10.6/ubuntu1604/client/lustre-utils_2.10.6-1_amd64.deb /tmp/
+
+# Using data repositories
+# https://docs.aws.amazon.com/fsx/latest/LustreGuide/fsx-data-repositories.html
+
+# recent versions not compatible with FSx
+#https://downloads.whamcloud.com/public/lustre/lustre-2.12.2/ubuntu1804/client/lustre-client-modules-4.15.0-45-generic_2.12.2-1_amd64.deb
+#https://downloads.whamcloud.com/public/lustre/lustre-2.12.2/ubuntu1804/client/lustre-client-utils_2.12.2-1_amd64.deb
+
+# on an Amazon Linux 2 instance (such as the ECS optimized images)
+# sudo yum install -y lustre-client
+
+# To mount from the instance:
+# https://docs.aws.amazon.com/fsx/latest/LustreGuide/mounting-ec2-instance.html
+#
+# sudo mkdir -p /mnt/fsx
+# sudo mount -t lustre file_system_dns_name@tcp:/fsx /mnt/fsx
 
 dockerfile="
 FROM $imgname
