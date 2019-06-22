@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 
 cename="$1"
-keypair="$2"
-fsxdns="$3"
+fsxdns="$2"
 
 SCRIPTSDIR=$(dirname "$(readlink -f "$0")")
-REPODIR=$(dirname "$SCRIPTSDIR/..")
+REPODIR=$(readlink -f "$SCRIPTSDIR/..")
 
 set -exo pipefail
 
 usage () {
-    echo "$(basename "$0") CENAME KPNAME LUSTREDNS
+    echo "$(basename "$0") CENAME LUSTREDNS
 
     CENAME name of the environment to create
-    KPNAME name of the key-pair to use to login to the instances
     LUSTREDNS dns endpoint of the lustre fsx to mount
 "
+}
+
+key_pair_name () {
+    python -c "import bunnies.environment as E; print(E.get_key_name())"
 }
 
 tmpdir=$(mktemp -d tmp-ce-setup-XXXXX)
@@ -31,6 +33,7 @@ trap cleanup EXIT
     exit 1
 }
 
+keypair=$(key_pair_name)
 [[ -n "$keypair" ]] || {
     echo "missing key pair name" >&2
     usage >&2;
@@ -53,20 +56,21 @@ Content-Type: text/cloud-config; charset="us-ascii"
 runcmd:
 - amazon-linux-extras install -y lustre2.10
 - fsxdir=/mnt/fsx1
-- fsxdns=foo
+- fsxdns='${fsxdns}'
 - mkdir -p ${efs_directory}
 - echo ${fsxdns}@tcp:/fsx ${fsxdir} lustre defaults,_netdev 0 0 >> /etc/fstab
 - mount -a -t lustre defaults
 
 --==MYBOUNDARY==
 '
-launchb64=$(echo "$launchuserdata" | base64)
-launchtemplatename="bunnies-launch-template"
+# -w 0 disables line wrapping in output -- we want single line
+launchb64=$(echo "$launchuserdata" | base64 -w 0)
+launchtemplatename="bunnies-launch-template-$cename"
 launchtemplatedata='{
     "LaunchTemplateName": "'$launchtemplatename'",
     "VersionDescription": "adds lustre filesystems to default environment",
     "LaunchTemplateData": {
-        "UserData": "'$launchb64'"
+        "UserData": "'$launchb64'",
         "TagSpecifications": [
             {
                 "ResourceType": "launch-template",
@@ -82,7 +86,15 @@ launchtemplatedata='{
 }'
 
 tee <<<"$launchtemplatedata" "$tmpdir/launch-template-data.json"
-aws ec2 create-launch-template --cli-input-json "file://$tmpdir/launch-template-data.json" > "$REPODIR"/bunnies-launch-template.json
+
+template_json="$REPODIR/bunnies-launch-template-$cename.json"
+if [[ -f "${template_json}" ]]; then
+    echo "template ${template_json} already exists..."
+else
+    echo "creating launch template..."
+    aws ec2 create-launch-template --cli-input-json "file://$tmpdir/launch-template-data.json" > "$template_json".tmp
+    mv "$template_json"{.tmp,}
+fi
 
 # {
 #     "LaunchTemplate": {
@@ -100,13 +112,13 @@ aws ec2 create-launch-template --cli-input-json "file://$tmpdir/launch-template-
 #         ]
 #     }
 # }
-launchtemplateid=""
+cat "${template_json}"
+launchtemplateid=$("$SCRIPTSDIR/read_json_key" LaunchTemplate.LaunchTemplateId < "${template_json}")
 
 # grab subnet id (i.e. subnet-0f...)
-subnetid=""
-
+subnetid=$(python -c "from bunnies.config import config as C; print(C['subnet_id'])")
 # grab security group id(s)
-sgid=""
+sgid=$(python -c "from bunnies.config import config as C; print(C['security_group_id'])")
 
 cetype="spot" # EC2 | SPOT
 
