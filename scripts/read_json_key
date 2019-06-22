@@ -21,15 +21,22 @@ def walk(obj, path):
     else:
         return val
 
+
 if __name__ == "__main__":
     key = sys.argv[1]
     obj = json.load(sys.stdin)
 
     val = walk(obj, key.split("."))
 
-    if isinstance(val, list):
-        for x in val: print(x)
-    else:
-        print(val)
+    def output(val):
+        if isinstance(val, (dict, list)):
+            print(json.dumps(val))
+        else:
+            print(val)
 
+    if isinstance(val, list):
+        for x in val:
+            output(x)
+    else:
+        output(val)
 
