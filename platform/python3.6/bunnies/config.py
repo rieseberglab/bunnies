@@ -15,7 +15,8 @@ def _load_config():
     search_for = (
         ("cluster", "cluster-settings.json"),
         ("network", "network-settings.json"),
-        ("storage", "storage-settings.json")
+        ("storage", "storage-settings.json"),
+        ("key",     "key-settings.json"),
     )
 
     for name, target in search_for:
@@ -25,7 +26,10 @@ def _load_config():
             infd = utils.find_config_file(startdir, target)
             if infd is None:
                 raise exc.BunniesException("couldn't load %s file %s" % (name, target))
-            doc = json.load(infd)
+            try:
+                doc = json.load(infd)
+            except json.decoder.JSONDecodeError as decodeErr:
+                raise exc.BunniesException("invalid json in %s file %s: %s" % (name, target, decodeErr))
             settings.update(doc)
         finally:
             if infd:
