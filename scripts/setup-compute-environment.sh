@@ -7,6 +7,7 @@ cerolename="bunnies-ecs-instance-role"
 cespotrolename="bunnies-ec2-spot-fleet-role"
 cebatchservicerolename="bunnies-batch-service-role"
 cetype="EC2" # EC2 | SPOT
+ceinstanceprofilename="bunnies-batch-instance-profile"
 
 # grab subnet id (i.e. subnet-0f...)
 subnetid=$(python -c "from bunnies.config import config as C; print(C['subnet_id'])")
@@ -107,22 +108,6 @@ else
     mv "$template_json"{.tmp,}
 fi
 
-# {
-#     "LaunchTemplate": {
-#         "LaunchTemplateId": "LaunchTemplateId",
-#         "LaunchTemplateName": "LaunchTemplateName",
-#         "CreateTime": "1970-01-01T00:00:00",
-#         "CreatedBy": "CreatedBy",
-#         "DefaultVersionNumber": 0,
-#         "LatestVersionNumber": 0,
-#         "Tags": [
-#             {
-#                 "Key": "Key",
-#                 "Value": "Value"
-#             }
-#         ]
-#     }
-# }
 launchtemplateid=$("$SCRIPTSDIR/read_json_key" LaunchTemplate.LaunchTemplateId < "${template_json}")
 
 # create ecs instance role
@@ -134,6 +119,8 @@ if ! aws iam list-roles | egrep -q "\b${cerolename}\b"; then
 	--assume-role-policy-document file://"$SCRIPTSDIR"/../roles/bunnies-ecs-instance-trust-relationship.json \
 	--tags Key=Platform,Value=bunnies
 fi
+
+instancerolearn=$(aws iam get-role --role-name "${cerolename}" --query Role.Arn --output text)
 
 aws iam attach-role-policy \
     --role-name "${cerolename}" \
@@ -148,6 +135,7 @@ if ! aws iam list-roles | egrep -q "\b${cespotrolename}\b"; then
 	--assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
 	--tags Key=Platform,Value=bunnies
 fi
+spotrolearn=$(aws iam get-role --role-name "${cespotrolename}" --query Role.Arn --output text)
 
 aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
@@ -165,6 +153,24 @@ fi
 aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole \
     --role-name "${cebatchservicerolename}"
+
+servicerolearn=$(aws iam get-role --role-name "${cebatchservicerolename}" --query Role.Arn --output text)
+
+if ! aws iam get-instance-profile --instance-profile-name "${ceinstanceprofilename}"; then
+    aws iam create-instance-profile --instance-profile-name "${ceinstanceprofilename}" --path="/"
+fi
+
+profilearn=$(aws iam get-instance-profile --instance-profile-name "${ceinstanceprofilename}" --query InstanceProfile.Arn --output text)
+
+add_role_resp=$(aws iam add-role-to-instance-profile --instance-profile-name "${ceinstanceprofilename}" \
+		    --role-name "${cerolename}" 2>&1 || echo "failed.")
+if grep -q "failed." <<<"${add_role_resp}"; then
+    if ! grep -q "Cannot exceed quota" <<<"${add_role_resp}"; then
+	echo "${add_role_resp}" >&2
+	exit 1
+    fi
+    # idempotent already there -- pass
+fi
 
 # "imageId": "",
 # computeResources."placementGroup": "",
@@ -187,17 +193,17 @@ cedef='{
             "'$sgid'"
         ],
         "ec2KeyPair": "'$keypair'",
-        "instanceRole": "'$cerolename'",
+        "instanceRole": "'$profilearn'",
         "tags": {
             "platform": "bunnies"
         },
         "bidPercentage": 100,
-        "spotIamFleetRole": "'$cespotrolename'",
+        "spotIamFleetRole": "'$spotrolearn'",
         "launchTemplate": {
             "launchTemplateId": "'$launchtemplateid'"
         }
     },
-    "serviceRole": "'${cebatchservicerolename}'"
+    "serviceRole": "'${servicerolearn}'"
 }'
 
 tmpjson=$(mktemp -p "$tmpdir" "ce-input-XXXX.json")
