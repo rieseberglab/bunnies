@@ -3,6 +3,17 @@
 cename="$1"
 fsxdns="$2"
 
+cerolename="bunnies-ecs-instance-role"
+cespotrolename="bunnies-ec2-spot-fleet-role"
+cebatchservicerolename="bunnies-batch-service-role"
+cetype="EC2" # EC2 | SPOT
+
+# grab subnet id (i.e. subnet-0f...)
+subnetid=$(python -c "from bunnies.config import config as C; print(C['subnet_id'])")
+# grab security group id(s)
+sgid=$(python -c "from bunnies.config import config as C; print(C['security_group_id'])")
+
+
 SCRIPTSDIR=$(dirname "$(readlink -f "$0")")
 REPODIR=$(readlink -f "$SCRIPTSDIR/..")
 
@@ -112,36 +123,57 @@ fi
 #         ]
 #     }
 # }
-cat "${template_json}"
 launchtemplateid=$("$SCRIPTSDIR/read_json_key" LaunchTemplate.LaunchTemplateId < "${template_json}")
 
-# grab subnet id (i.e. subnet-0f...)
-subnetid=$(python -c "from bunnies.config import config as C; print(C['subnet_id'])")
-# grab security group id(s)
-sgid=$(python -c "from bunnies.config import config as C; print(C['security_group_id'])")
+# create ecs instance role
+if ! aws iam list-roles | egrep -q "\b${cerolename}\b"; then
+    aws iam create-role \
+	--role-name "${cerolename}" \
+	--path / \
+	--description "Role to assign ECS instances spawned by bunnies platform" \
+	--assume-role-policy-document file://"$SCRIPTSDIR"/../roles/bunnies-ecs-instance-trust-relationship.json \
+	--tags Key=Platform,Value=bunnies
+fi
 
-cetype="spot" # EC2 | SPOT
+aws iam attach-role-policy \
+    --role-name "${cerolename}" \
+    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 
-# FIXME create instance role
-cerole="arn:aws:iam::879518704116:instance-profile/ecsInstanceRole"
+# create EC2 spot fleet role
+if ! aws iam list-roles | egrep -q "\b${cespotrolename}\b"; then
+    aws iam create-role \
+	--role-name "${cespotrolename}" \
+	--path / \
+	--description "allow bunnies ec2 instances to join spot fleets" \
+	--assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+	--tags Key=Platform,Value=bunnies
+fi
 
-# FIXME create EC2 spot fleet role
-aws iam create-role --role-name AmazonEC2SpotFleetRole \
-    --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
-    --role-name AmazonEC2SpotFleetRole
-spotrole=""
+    --role-name "${cespotrolename}"
+
+# create service role to allow aws to make Batch calls on your behalf.
+if ! aws iam list-roles | egrep -q "\b${cebatchservicerolename}\b"; then
+    aws iam create-role \
+	--role-name "${cebatchservicerolename}" \
+	--path "/service-role/" \
+	--description "allow aws to issue batch calls on behalf of user" \
+	--assume-role-policy-document file://"${SCRIPTSDIR}"/../roles/bunnies-batch-service-role-trust-relationship.json
+fi
+
+aws iam attach-role-policy \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole \
+    --role-name "${cebatchservicerolename}"
 
 # "imageId": "",
 # computeResources."placementGroup": "",
-cedef='
-{
+cedef='{
     "computeEnvironmentName": "'$cename'",
     "type": "MANAGED",
     "state": "ENABLED",
     "computeResources": {
-        "type": "EC2",
+        "type": "'$cetype'",
         "minvCpus": 0,
         "maxvCpus": 256,
         "desiredvCpus": 0,
@@ -155,22 +187,22 @@ cedef='
             "'$sgid'"
         ],
         "ec2KeyPair": "'$keypair'",
-        "instanceRole": "'$cerole'",
+        "instanceRole": "'$cerolename'",
         "tags": {
             "platform": "bunnies"
         },
         "bidPercentage": 100,
-        "spotIamFleetRole": "'$spotrole'",
+        "spotIamFleetRole": "'$cespotrolename'",
         "launchTemplate": {
-            "launchTemplateId": "'$launchtemplateid'",
+            "launchTemplateId": "'$launchtemplateid'"
         }
     },
-    "serviceRole": ""
-}
-'
+    "serviceRole": "'${cebatchservicerolename}'"
+}'
 
+tmpjson=$(mktemp -p "$tmpdir" "ce-input-XXXX.json")
+echo "$cedef" > "$tmpjson"
 aws batch create-compute-environment \
     --compute-environment-name "$cename" \
-    --type "managed" \
-    --state "ENABLED" \
-    --compute-resources type=$cetype,minvCpus=0,maxvCpus=256,desiredvCpus=0,instanceTypes=optimal
+    --cli-input-json file://"$tmpjson"
+
