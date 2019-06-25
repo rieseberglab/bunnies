@@ -7,16 +7,18 @@ set -ex
 # outputs the new object ids to file network-settings.json
 #
 OUTFILE="${OUTFILE:-network-settings.json}"
-PFX=reprod
+PFX=bunnies
 VPCNAME=$PFX-vpc
 GATEWAYNAME=$PFX-gateway
 SUBNETNAME=$PFX-subnet
 SECGROUPNAME=$PFX-security-group
 ROUTETABLENAME=$PFX-route-table
+ROUTETABLENAMEMAIN=$PFX-main-route-table
 
 INGRESS_PORTS=(
-    "tcp 22 0.0.0.0/0"
-    "tcp 8000 0.0.0.0/0"
+    "tcp 22 0.0.0.0/0"   # SSH
+    "tcp 8000 0.0.0.0/0" # Custom API
+    "tcp 988 0.0.0.0/0"  # FSx
 )
 
 #
@@ -51,7 +53,7 @@ if [[ -z "$vpc_id" ]]; then
     :
     : create vpc
     :
-    resp=$(aws ec2 create-vpc --cli-input-json file://"${HERE}/../tasks/$PFX-vpc.json")
+    resp=$(aws ec2 create-vpc --cli-input-json file://"${HERE}/../awscfg/$PFX-vpc.json")
 
     vpc_id=$(echo "$resp" | grep 'VpcId":' | egrep -o 'vpc-[^\"]+')
     echo VPC created: "${vpc_id}"
@@ -88,7 +90,7 @@ if [[ -z "$vpc_id" ]]; then
     :
     : create subnet in vpc
     :
-    subnet_response=$(aws ec2 create-subnet --cli-input-json file://"${HERE}/../tasks/$PFX-vpc-subnet.json" \
+    subnet_response=$(aws ec2 create-subnet --cli-input-json file://"${HERE}/../awscfg/$PFX-vpc-subnet.json" \
 			  --vpc-id "$vpc_id" --output json)
     subnet_id=$(echo "$subnet_response" | json_key Subnet.SubnetId)
 
@@ -97,11 +99,12 @@ if [[ -z "$vpc_id" ]]; then
 	--tags Key=Name,Value="$SUBNETNAME"
 
     :
-    : no public ip assigned by default in subnet
+    : public ip assigned by default in subnet
     :
-    # instances started on this subnet do not receive a public ip by default
     modify_response=$(aws ec2 modify-subnet-attribute --subnet-id "$subnet_id" \
-			  --no-map-public-ip-on-launch)
+			  --map-public-ip-on-launch)  # --no-map-public-ip-on-launch
+
+    # FIXME -- ideally we'd configure both a private IP subnet and a public IP one.
 
     :
     : create security group
@@ -126,7 +129,31 @@ if [[ -z "$vpc_id" ]]; then
     done
 
     :
-    : create routing table for vpc
+    : allow any ingress traffic from self
+    :
+    security_response2=$(aws ec2 authorize-security-group-ingress \
+			     --group-id "$secgroup_id" \
+			     --protocol "all" \
+			     --source-group "$secgroup_id")
+
+    :
+    : connect default route table with internet-gateway
+    :
+    default_route_table_id=$(aws ec2 describe-route-tables \
+				 --filters "Name=vpc-id,Values=${vpc_id}" \
+				           "Name=association.main,Values=true" \
+					   --query "RouteTables[0].RouteTableId" --output text)
+    :
+    : name it the default table to avoid confusion
+    :
+    aws ec2 create-tags --resources "$default_route_table_id" \
+	--tags Key=Name,Value="$ROUTETABLENAMEMAIN"
+    route_response=$(aws ec2 create-route --route-table-id "${default_route_table_id}" \
+			 --destination-cidr-block 0.0.0.0/0 \
+			 --gateway-id "$gateway_id")
+
+    :
+    : create custom routing table for vpc
     :
     route_table_response=$(aws ec2 create-route-table --vpc-id "$vpc_id" --output json)
     route_table_id=$(echo "$route_table_response" | json_key RouteTable.RouteTableId)
@@ -135,7 +162,7 @@ if [[ -z "$vpc_id" ]]; then
 	--tags Key=Name,Value="$ROUTETABLENAME"
 
     :
-    : add default route to internet gateway
+    : add route to internet gateway
     :
     route_response=$(aws ec2 create-route --route-table-id "$route_table_id" \
 			 --destination-cidr-block 0.0.0.0/0 \
