@@ -10,6 +10,7 @@ import bunnies
 # experiment specific
 from snpcalling import InputFile, Align, Merge
 
+bunnies.setup_logging()
 
 ha412     = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta")
 ha412_idx = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta.fai")
@@ -61,6 +62,11 @@ pipeline = bunnies.build_target(all_merged)
 # a URL where we can see details and progress in the browser
 # print(pipeline.dashboard_url())
 
+compute_env = bunnies.ComputeEnv("merge-example")
+compute_env.create()
+compute_env.create()
+compute_env.delete()
+
 task_resp = bunnies.execute.ecs_run_task("align-task", {
     "containerOverrides": [
         {
@@ -76,6 +82,8 @@ task_resp = bunnies.execute.ecs_run_task("align-task", {
 })
 
 
-print(task_resp)
+#print(task_resp)
 
-bunnies.execute.ecs_wait_for_tasks([task_resp])
+#bunnies.execute.ecs_wait_for_tasks([task_resp])
+
+

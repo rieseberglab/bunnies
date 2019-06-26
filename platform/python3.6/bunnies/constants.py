@@ -1,5 +1,7 @@
 import os
 
+PLATFORM = "bunnies"
+
 # all files imported into s3 have the following key set
 # in their metadata for each content digest processed on them
 # e.g. "digest-md5", "digest-sha1", etc.
@@ -13,3 +15,5 @@ IMPORT_DIGESTS_HEADER = "import-digests"
 MB = 1024 * 1024
 MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
 UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 6*MB
+
+
