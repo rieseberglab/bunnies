@@ -1,0 +1,43 @@
+
+
+job def:
+
+   - wrap user container
+
+   job-role: reprod-ecs-role
+
+   container image: 879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies
+
+   - vcpu 1
+
+   - command: leave blank
+
+   - mem: 1024
+
+   - mount points: container: /data  source: fsx-data
+
+     Volumes: /mnt/fsx1  name: fsx-data
+
+   - limits: CORE 0 0
+
+job queue:
+
+   - name
+
+   - priority 100
+
+   - connected compute environments: testfsx2
+
+create new job:
+
+   - pick name
+   - pick previous jobdef
+   - job type single
+
+   - command: simple-test-job.sh 60
+   
+   - ENV
+
+       BATCH_FILE_TYPE script
+       BATCH_FILE_S3_URL s3://reprod-test-bucket/simple-test-job.sh
+    
