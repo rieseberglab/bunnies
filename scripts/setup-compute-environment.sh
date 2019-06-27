@@ -69,7 +69,7 @@ runcmd:
 - amazon-linux-extras install -y lustre2.10
 - fsxdir=/mnt/fsx1
 - fsxdns='${fsxdns}'
-- mkdir -p ${efs_directory}
+- mkdir -p ${fsxdir}
 - echo ${fsxdns}@tcp:/fsx ${fsxdir} lustre defaults,_netdev 0 0 >> /etc/fstab
 - mount -a -t lustre defaults
 

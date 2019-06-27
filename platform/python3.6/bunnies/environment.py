@@ -10,6 +10,8 @@ import logging
 
 from .config import config
 from . import constants
+import botocore
+import botocore.waiter
 
 logger = logging.getLogger(__package__)
 
@@ -24,6 +26,89 @@ def get_subnet_id():
 
 def get_security_group_id():
     return config["security_group_id"]
+
+
+def _custom_waiters():
+    if not _custom_waiters.model:
+        waiters = {
+            "FileSystemDeleted": {
+                "delay": 15,
+                "operation": "DescribeFileSystems",
+                "maxAttempts": 40,
+                "acceptors": [
+                    {
+                        "expected": "AVAILABLE",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "expected": "DELETING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "expected": "CREATING",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "expected": "UPDATING",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "matcher": "error",
+                        "expected": "FileSystemNotFound",
+                        "state": "success"
+                    }
+                ]
+            },
+
+            "FileSystemReady": {
+                "delay": 15,
+                "operation": "DescribeFileSystems",
+                "maxAttempts": 40,
+                "acceptors": [
+                    {
+                        "expected": "AVAILABLE",
+                        "matcher": "pathAll",
+                        "state": "success",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "expected": "FAILED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "expected": "DELETING",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "FileSystems[].Lifecycle"
+                    },
+                    {
+                        "matcher": "error",
+                        "expected": "FileSystemNotFound",
+                        "state": "failure"
+                    }
+                ]
+            }
+        }
+        model = botocore.waiter.WaiterModel({
+            "version": 2,
+            "waiters": waiters
+        })
+        _custom_waiters.model = model
+    return _custom_waiters.model
+
+
+_custom_waiters.model = None
+
 
 
 class FSxDisk(object):
@@ -55,12 +140,27 @@ class FSxDisk(object):
             kwargs = {'MaxResults': 10}
             if resp['NextToken']:
                 kwargs['NextToken'] = resp['NextToken']
+            logger.info("listing file systems...")
             page = client.describe_file_systems(**kwargs)
+            logger.info("retrieved page with %d fses", len(page['FileSystems']))
             matches = [candidate for candidate in page['FileSystems']
                        if _tags_match(self.name, candidate['Tags'])]
             if matches:
                 return matches[0]
+            if len(page['FileSystems']) == 0:
+                return None
         return None
+
+    @property
+    def dns_name(self):
+        if not self.__fs:
+            self.__fs = self.retrieve_existing()
+        return self.__fs['DNSName']
+    @property
+    def fsid(self):
+        if not self.__fs:
+            self.__fs = self.retrieve_existing()
+        return self.__fs['FileSystemId']
 
     def delete(self):
         """
@@ -86,10 +186,10 @@ class FSxDisk(object):
         """
         exists = self.retrieve_existing()
         if exists:
-            logger.info("Reusing existing filesystem: %s", exists['ResourceARN'])
+            logger.info("reusing existing filesystem: %s", exists['ResourceARN'])
             self.__fs = exists
         else:
-            logger.info("Creatign Lustre FSx filesystem... Name=%s", self.name)
+            logger.info("creating Lustre FSx filesystem... Name=%s", self.name)
             client = boto3.client('fsx')
             resp = client.create_file_system(
                 ClientRequestToken=self.__token,
@@ -104,10 +204,20 @@ class FSxDisk(object):
                 }
             )
             self.__fs = resp['FileSystem']
+            logger.info("filesystem %s (id=%s) created", self.name, self.fsid)
 
-    def ready(self):
+    def wait_ready(self):
         """wait for the filesystem to be in the READY state"""
-        # FIXME custom boto waiter
+        logger.info("waiting for filesystem %s (id=%s) to be ready...", self.name, self.fsid)
+        client = boto3.client('fsx')
+        waiter = botocore.waiter.create_waiter_with_client("FileSystemReady", _custom_waiters(), client)
+        waiter.wait(FileSystemIds=[self.fsid])
+
+    def wait_deleted(self):
+        """wait for the filesystem to be deleted completely"""
+        client = boto3.client('fsx')
+        waiter = botocore.waiter.create_waiter_with_client("FileSystemReady", _custom_waiters(), client)
+        waiter.wait(FileSystemIds=[self.fsid])
 
 class ComputeEnv(object):
     def __init__(self, name, scratch_size_gb=3600):
@@ -122,17 +232,13 @@ class ComputeEnv(object):
 
     def create(self):
         """ensure all the entities are created"""
-        logger.info("Creating compute environment %s", self.name)
+        logger.info("creating compute environment %s", self.name)
 
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
             dobj.create()
 
-    def ready(self):
-        """ensure all the entities are VALID and ready to execute things"""
-        for name, ddict in self.disks.items():
-            dobj = ddict['obj']
-            dobj.ready()
+        logger.info("compute environment %s created", self.name)
 
     def delete(self):
         """ delete all entities associated with this compute environment
@@ -142,17 +248,30 @@ class ComputeEnv(object):
             dobj = ddict['obj']
             dobj.delete()
 
+    def wait_ready(self):
+        """ensure all the entities are VALID and ready to execute things"""
+        for name, ddict in self.disks.items():
+            dobj = ddict['obj']
+            dobj.wait_ready()
+
+    def wait_deleted(self):
+        """ensure all the entities are deleted completely"""
+        for name, ddict in self.disks.items():
+            dobj = ddict['obj']
+            dobj.delete()
+
 
 def _create_env(envname='', **kwargs):
     """create an environment and wait for it to be ready"""
     myenv = ComputeEnv(envname)
     myenv.create()
-    myenv.ready()
+    myenv.wait_ready()
 
 def _delete_env(envname='', **kwargs):
     """tear down an environment"""
     myenv = ComputeEnv(envname)
     myenv.delete()
+    myenv.wait_deleted()
 
 def main():
     import argparse
@@ -160,6 +279,7 @@ def main():
     import bunnies
 
     bunnies.setup_logging()
+    boto3.set_stream_logger('boto3.resources', logging.INFO)
 
     parser = argparse.ArgumentParser()
 
@@ -182,10 +302,10 @@ def main():
         sys.exit(1)
 
     func = {
-        'create': _create_env(args),
-        'delete': _delete_env(args)
+        'create': _create_env,
+        'delete': _delete_env
     }.get(args.command)
-    retcode = func(args)
+    retcode = func(**vars(args))
     sys.exit(int(retcode) if retcode is not None else 0)
 
 if __name__ == "__main__":
