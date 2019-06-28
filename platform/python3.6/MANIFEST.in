@@ -1,3 +1,3 @@
 include *.md
 include LICENSE.txt
-recursive-include data *
+recursive-include bunnies/data *

@@ -6,6 +6,7 @@ Setuptools bunnies platform module
 # Always prefer setuptools over distutils
 from setuptools import setup, find_packages
 from os import path
+import glob
 
 here = path.abspath(path.dirname(__file__))
 
@@ -147,16 +148,20 @@ setup(
     #
     # If using Python 2.6 or earlier, then these have to be included in
     # MANIFEST.in as well.
-    package_data={  # Optional
-        PKGNAME: [],
-    },
+    # package_data={  # Optional
+    #     PKGNAME: ['./data/permissions/*'],
+    # },
+
+    # Forget package_data={}. Just rely on MANIFEST.in
+    include_package_data=True,
+    zip_safe=False,
 
     # Although 'package_data' is the preferred approach, in some case you may
     # need to place data files outside of your packages. See:
     # http://docs.python.org/3.4/distutils/setupscript.html#installing-additional-files
     #
     # In this case, 'data_file' will be installed into '<sys.prefix>/my_data'
-    data_files=[('my_data', ['data/_placeholder_'])],  # Optional
+    #data_files=[('my_data', ['data/_placeholder_'])],  # Optional
 
     # To provide executable scripts, use entry points in preference to the
     # "scripts" keyword. Entry points provide cross-platform support and allow
