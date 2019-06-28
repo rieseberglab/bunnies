@@ -1,3 +1,6 @@
+create environment:
+
+   ./scripts/setup-compute-environment.sh testfsx3 fs-039cc6cad457aff6e.fsx.us-west-2.amazonaws.com
 
 
 job def:
