@@ -61,15 +61,88 @@ def setup_ecs_role():
     return client.get_role(RoleName=ecs_role_name)
 
 
-def _make_jobdef(name, jobroleArn, image, vcpu, memory):
+def get_jobqueue(name):
     client = boto3.client('batch')
+    jq = client.describe_job_queues(
+        jobQueues=[name]
+    )
+    return jq['jobQueues'][0]
+
+
+def make_jobqueue(name, priority=100, compute_envs=()):
+    """
+       args:
+           name of queue
+       priority: int
+
+       compute_envs:  ((str_name, int_order),...)
+          the compute environemnts to associate with the queue
+    """
+    if not compute_envs or len(compute_envs) == 0:
+        raise ValueError("must specify at least one compute environment")
+
+    client = boto3.client('batch')
+    try:
+        jq = client.create_job_queue(state='ENABLED',
+                                     jobQueueName=name,
+                                     priority=priority,
+                                     computeEnvironmentOrder=[
+                                         {
+                                             "order": order,
+                                             "computeEnvironment": ce_name
+                                         } for (ce_name, order) in compute_envs
+                                     ])
+        return jq
+    except ClientError as clierr:
+        if clierr.response['ResponseMetadata']['HTTPStatusCode'] == 409:
+            # conflict -- already exists
+            logger.info("job queue already exists. returning existing")
+            return get_jobqueue(name)
+        raise
+
+
+def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, update=True):
+    """create/update a new job definition for a simple (single-container)
+    job. if there already exists at least one revision of the given name,
+    then the existing job definition is returned (update=False), or it is
+    updated with the settings passed in (update=True).
+
+    On update=False, there is a possible race condition on creation
+    which will cause two revisions to be created simultaneously. In this case
+    one of the make_jobdef calls will return revision 1, and the other, revision 2.
+    Subsequent calls would reuse the latest, revision 2.
+
+      name: name of the job (128 chars, [-a-zA-Z0-9_])
+      jobroleArn: role to assign the ECS container that will be started
+      image: the name of the container image
+      vcpus: default number of vcpus
+      memory: default amount of memory
+
+    """
+    client = boto3.client('batch')
+
+    def jobdef_exists(client, name):
+        paginator = client.get_paginator('describe_job_definitions')
+        def_iterator = paginator.paginate(jobDefinitions=[name])
+        for page in def_iterator:
+            print(page)
+            raise Exception("crap")
+        raise Exception("foo")
+
+    if not update:
+        existing = jobdef_exists(client, name)
+        if existing:
+            logger.info("reusing existing job definition %s (Arn=%s)", name, existing['jobDefinitionArn'])
+            return existing
+
+    logger.info("creating job definition %s with image %s...", name, image)
     jd = client.register_job_definition(
-        jobDefinition=name,
+        jobDefinitionName=name,
         type='container',
         containerProperties={
             'image': image,
-            'vcpu': 1,
-            'memory': 128,
+            'vcpus': vcpus,
+            'memory': memory,
             'jobRoleArn': jobroleArn,
             'volumes': [
                 {
@@ -88,9 +161,9 @@ def _make_jobdef(name, jobroleArn, image, vcpu, memory):
             ],
             'privileged': False,
             'ulimits': [
-                { 'name': "CORE",
-                  'hardlimit': 0,
-                  'softlimit': 0
+                { 'name': "core",
+                  'hardLimit': 0,
+                  'softLimit': 0
                 }
             ],
             'user': 'root'
@@ -102,19 +175,30 @@ def _make_jobdef(name, jobroleArn, image, vcpu, memory):
             'attemptDurationSeconds': 1000
         }
     )
+    logger.info("job definition %s created (Arn=%s)", name, jd['jobDefinitionArn'])
+    return jd
 
 
-def _test_submit(name, queue, jobdef, command):
+def submit_job(name, queue, jobdef, command, vcpu, memory):
+    """
+    args:
+      name: name of the job
+      queue: queue name or arn
+      jobdef: the name of the queue (name:revision) or arn
+      command: [str, str, str, ...] to override the job definition command
+      vcpu: int  (overrides job def)
+      memory: int  (overrides job def)
+    """
     client = boto3.client('batch')
     submission = client.submit_job(
-        jobName = "test",
-        jobQueue = queue,
-        dependsOn = [],
+        jobName=name,
+        jobQueue=queue,
+        dependsOn=[],
         jobDefinition=jobdef,
         parameters={},
         containerOverrides={
-            'vcpus': 1,
-            'memory': 256,
+            'vcpus': vcpu,
+            'memory': memory,
             'command': command,
             'environment': [
                 {'name': 'BATCH_FILE_TYPE', 'value': 'script'},
@@ -131,7 +215,16 @@ def _test_submit(name, queue, jobdef, command):
 
 
 def _setup_jobs(**kwargs):
-    setup_ecs_role()
+    role = setup_ecs_role()
+    image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
+    jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, update=False)
+    jobqueue = make_jobqueue("bunnies-test-queue", compute_envs=[
+        ("testfsx3", 100)
+    ])
+    test_job = submit_job("simple-sleeper", jobqueue['jobQueueArn'], jobdef['jobDefinitionArn'],
+                          ['simple-test-job.sh', '600'], 1, 128)
+    print(test_job)
+
 
 def main():
     import argparse
