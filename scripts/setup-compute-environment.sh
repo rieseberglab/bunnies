@@ -59,6 +59,7 @@ keypair=$(key_pair_name)
 }
 
 # create launch template
+fsxmountdir="/mnt/fsx1"
 launchuserdata='MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
 
@@ -67,8 +68,8 @@ Content-Type: text/cloud-config; charset="us-ascii"
 
 runcmd:
 - amazon-linux-extras install -y lustre2.10
-- fsxdir=/mnt/fsx1
-- fsxdns='${fsxdns}'
+- fsxdir='"${fsxmountdir}"'
+- fsxdns='"${fsxdns}"'
 - mkdir -p ${fsxdir}
 - echo ${fsxdns}@tcp:/fsx ${fsxdir} lustre defaults,_netdev 0 0 >> /etc/fstab
 - mount -a -t lustre defaults
@@ -85,11 +86,23 @@ launchtemplatedata='{
         "UserData": "'$launchb64'",
         "TagSpecifications": [
             {
-                "ResourceType": "launch-template",
+                "ResourceType": "instance",
                 "Tags": [
                     {
                         "Key": "platform",
                         "Value": "bunnies"
+                    },
+                    {
+                        "Key": "compute_environment",
+                        "Value": "'$cename'"
+                    },
+                    {
+                        "Key": "scratchdns",
+                        "Value": "'$fsxdns'"
+                    },
+                    {
+                        "Key": "scratchdir",
+                        "Value": "'$fsxmountdir'"
                     }
                 ]
             }

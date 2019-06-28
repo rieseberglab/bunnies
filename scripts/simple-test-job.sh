@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-
+set -x
 date
 echo "Args: $@"
 env
@@ -11,7 +11,7 @@ sleep $1
 date
 df -h || :
 mount || :
-ls -l /data/foo || :
+find /data || :
 echo "$$" >> "/data/foo.$$" || :
 mkdir -p /data/x/ || :
 find /data || :
