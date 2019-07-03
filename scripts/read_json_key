@@ -14,7 +14,6 @@ def walk(obj, path):
     lead = path.pop(0)
     if lead[0] in "0123456789":
         lead = int(lead, 10)
-    sys.stderr.write(repr(lead) + "\n")
     val = obj[lead]
     if path:
         return walk(val, path)

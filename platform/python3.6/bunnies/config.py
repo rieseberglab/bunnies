@@ -17,7 +17,7 @@ def _load_config():
         ("cluster", "cluster-settings.json"),
         ("network", "network-settings.json"),
         ("storage", "storage-settings.json"),
-        ("key",     "key-settings.json"),
+        ("key",     "key-pair-settings.json"),
     )
 
     for name, target in search_for:
