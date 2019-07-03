@@ -48,7 +48,7 @@ def setup_ecs_role():
             pass
         else:
             raise
-
+            
     for pfile in permissions_files(PLATFORM + "-ecs"):
         basename = os.path.basename(pfile)
         noext = os.path.splitext(basename)[0]
@@ -71,6 +71,9 @@ def get_jobqueue(name):
 
 def make_jobqueue(name, priority=100, compute_envs=()):
     """
+       create a jobqueue with the given name. if it already exists
+       it is returned.
+
        args:
            name of queue
        priority: int
@@ -92,22 +95,24 @@ def make_jobqueue(name, priority=100, compute_envs=()):
                                              "computeEnvironment": ce_name
                                          } for (ce_name, order) in compute_envs
                                      ])
+        logger.info("created job queue %s (Arn=%s)", name, jq['jobQueueArn'])
         return jq
     except ClientError as clierr:
         if clierr.response['ResponseMetadata']['HTTPStatusCode'] == 409:
             # conflict -- already exists
-            logger.info("job queue already exists. returning existing")
-            return get_jobqueue(name)
+            existing = get_jobqueue(name)
+            logger.info("job queue %s (Arn=%s) already exists. returning existing", existing['jobQueueName'], existing['jobQueueArn'])
+            return existing
         raise
 
 
-def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, update=True):
+def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
     """create/update a new job definition for a simple (single-container)
     job. if there already exists at least one revision of the given name,
-    then the existing job definition is returned (update=False), or it is
-    updated with the settings passed in (update=True).
+    then the existing job definition is returned (reuse=True), or it is
+    updated with the settings passed in (reuse=False).
 
-    On update=False, there is a possible race condition on creation
+    On reuse=False, there is a possible race condition on creation
     which will cause two revisions to be created simultaneously. In this case
     one of the make_jobdef calls will return revision 1, and the other, revision 2.
     Subsequent calls would reuse the latest, revision 2.
@@ -123,13 +128,21 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, update=True):
 
     def jobdef_exists(client, name):
         paginator = client.get_paginator('describe_job_definitions')
-        def_iterator = paginator.paginate(jobDefinitions=[name])
+        def_iterator = paginator.paginate(jobDefinitionName=name)
+        found = None
         for page in def_iterator:
-            print(page)
-            raise Exception("crap")
-        raise Exception("foo")
+            page_defs = page['jobDefinitions']
+            if len(page_defs) == 0:
+                break
+            found = [pdef for pdef in page_defs if
+                     pdef['jobDefinitionName'] == name]
+            if found:
+                break
+        if not found:
+            return None
+        return found[0]
 
-    if not update:
+    if reuse:
         existing = jobdef_exists(client, name)
         if existing:
             logger.info("reusing existing job definition %s (Arn=%s)", name, existing['jobDefinitionArn'])
@@ -189,6 +202,14 @@ def submit_job(name, queue, jobdef, command, vcpu, memory):
       vcpu: int  (overrides job def)
       memory: int  (overrides job def)
     """
+    logger.info("submitting job %(name)s/%(jobdef)s to queue %(queue)s: %(vcpu)s vcpus %(memory)sMB %(command)s",
+                {"name": name,
+                 "queue": queue,
+                 "jobdef": jobdef,
+                 "vcpu": vcpu,
+                 "memory": memory,
+                 "command": command
+             })
     client = boto3.client('batch')
     submission = client.submit_job(
         jobName=name,
@@ -212,12 +233,14 @@ def submit_job(name, queue, jobdef, command, vcpu, memory):
             'attemptDurationSeconds': 1000
         }
     )
+    logger.info("job %s submitted", submission)
+    return submission
 
 
 def _setup_jobs(**kwargs):
     role = setup_ecs_role()
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
-    jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, update=False)
+    jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, reuse=True)
     jobqueue = make_jobqueue("bunnies-test-queue", compute_envs=[
         ("testfsx3", 100)
     ])
