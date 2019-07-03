@@ -241,6 +241,9 @@ def _setup_jobs(**kwargs):
     role = setup_ecs_role()
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
     jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, reuse=True)
+
+    from bunnies import ComputeEnv
+    ce = ComputeEnv("testfsx3")
     jobqueue = make_jobqueue("bunnies-test-queue", compute_envs=[
         ("testfsx3", 100)
     ])

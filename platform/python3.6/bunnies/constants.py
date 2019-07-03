@@ -17,3 +17,7 @@ MAX_SINGLE_UPLOAD_SIZE = 5 * (1024 ** 3)
 UPLOAD_CHUNK_SIZE = int(os.environ.get("UPLOAD_CHUNK_SIZE", "0"), 10) or 6*MB
 
 
+CE_ECS_INSTANCE_ROLE = "bunnies-ecs-instance-role"
+CE_SPOT_ROLE = "bunnies-ec2-spot-fleet-role"
+CE_BATCH_SERVICE_ROLE = "bunnies-batch-service-role"
+CE_INSTANCE_PROFILE = "bunnies-batch-instance-profile"

@@ -219,6 +219,80 @@ class FSxDisk(object):
         waiter = botocore.waiter.create_waiter_with_client("FileSystemReady", _custom_waiters(), client)
         waiter.wait(FileSystemIds=[self.fsid])
 
+def _create_ecs_instance_role():
+    # create ecs instance role
+    client = boto3.client("iam")
+    ecs_role_name = constants.BUNNIES_ECS_INSTANCE_ROLE
+    logger.info("creating IAM role %s", ecs_role_name)
+    try:
+        with open("../roles/bunnies-ecs-instance-trust-relationship.json", "r") as fd:
+            jobs_ecs_trust = fd.read()
+
+        client.create_role(Path='/',
+                           RoleName=ecs_role_name,
+                           Description="Role to assign ECS instances spawned by bunnies platform",
+                           AssumeRolePolicyDocument=json.dumps(jobs_ecs_trust),
+                           Tags=[{'Key':'platform', 'Value': 'bunnies'}])
+        logger.info("IAM role %s created", ecs_role_name)
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing role %s", ecs_role_name)
+            pass
+        else:
+            raise
+
+    client.attach_role_policy(RoleName=ecs_role_name,
+                              PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role")
+
+    return client.get_role(RoleName=ecs_role_name)
+
+def _create_ec2_spot_fleet_role():
+    # allow bunnies ec2 to join spot fleets
+    client = boto3.client("iam")
+    ecs_role_name = constants.BUNNIES_ECS_INSTANCE_ROLE
+    logger.info("creating IAM role %s", ecs_role_name)
+    try:
+        with open("../roles/bunnies-ecs-instance-trust-relationship.json", "r") as fd:
+            jobs_ecs_trust = fd.read()
+
+        client.create_role(Path='/',
+                           RoleName=ecs_role_name,
+                           Description="Role to assign ECS instances spawned by bunnies platform",
+                           AssumeRolePolicyDocument=json.dumps(jobs_ecs_trust),
+                           Tags=[{'Key':'platform', 'Value': 'bunnies'}])
+        logger.info("IAM role %s created", ecs_role_name)
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing role %s", ecs_role_name)
+            pass
+        else:
+            raise
+    
+# create EC2 spot fleet role
+if ! aws iam list-roles | egrep -q "\b${cespotrolename}\b"; then
+    aws iam create-role \
+	--role-name "${cespotrolename}" \
+	--path / \
+	--description "allow bunnies ec2 instances to join spot fleets" \
+	--assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+	--tags Key=Platform,Value=bunnies
+fi
+spotrolearn=$(aws iam get-role --role-name "${cespotrolename}" --query Role.Arn --output text)
+
+aws iam attach-role-policy \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
+    --role-name "${cespotrolename}"
+
+# create service role to allow aws to make Batch calls on your behalf.
+if ! aws iam list-roles | egrep -q "\b${cebatchservicerolename}\b"; then
+    aws iam create-role \
+	--role-name "${cebatchservicerolename}" \
+	--path "/service-role/" \
+	--description "allow aws to issue batch calls on behalf of user" \
+	--assume-role-policy-document file://"${SCRIPTSDIR}"/../roles/bunnies-batch-service-role-trust-relationship.json
+fi
+
+
 class ComputeEnv(object):
     def __init__(self, name, scratch_size_gb=3600):
         self.name = name
