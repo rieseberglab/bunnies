@@ -5,9 +5,80 @@ from .utils import data_files
 import json
 import logging
 import os.path
+import botocore.waiter
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__package__)
+
+
+def _custom_waiters():
+    if not _custom_waiters.model:
+        waiters = {
+            "JobQueueReady": {
+                "delay": 15,
+                "operation": "DescribeJobQueues",
+                "maxAttempts": 40,
+                "acceptors": [
+                    {
+                        "expected": "DISABLED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].state"
+                    },
+                    {
+                        "expected": "CREATING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "UPDATING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "DELETING",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "DELETED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "INVALID",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "VALID",
+                        "matcher": "pathAll",
+                        "state": "success",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "matcher": "path",
+                        "expected": True,
+                        "argument": "length(jobQueues[]) > `0`",
+                        "state": "failure"
+                    }
+                ]
+            },
+        }
+        model = botocore.waiter.WaiterModel({
+            "version": 2,
+            "waiters": waiters
+        })
+        _custom_waiters.model = model
+    return _custom_waiters.model
+
+
+_custom_waiters.model = None
 
 
 def setup_ecs_role():
@@ -62,6 +133,15 @@ def get_jobqueue(name):
     return jq['jobQueues'][0]
 
 
+def wait_queue_ready(queueNames):
+    """wait for a job queue to be in the READY+VALID state"""
+    logger.info("waiting for queue(s) %s to be ready...", queueNames)
+    client = boto3.client('batch')
+    waiter = botocore.waiter.create_waiter_with_client("JobQueueReady", _custom_waiters(), client)
+    waiter.wait(jobQueues=queueNames)
+    logger.info("queue(s) %s ready", queueNames)
+
+
 def make_jobqueue(name, priority=100, compute_envs=()):
     """
        create a jobqueue with the given name. if it already exists
@@ -99,7 +179,7 @@ def make_jobqueue(name, priority=100, compute_envs=()):
         raise
 
 
-def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
+def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse=True):
     """create/update a new job definition for a simple (single-container)
     job. if there already exists at least one revision of the given name,
     then the existing job definition is returned (reuse=True), or it is
@@ -115,11 +195,11 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
       image: the name of the container image
       vcpus: default number of vcpus
       memory: default amount of memory
-
+      mounts: [{ name: "foo", "host_src": "/path/on/host", "dst": "/path/in/container" }, ...]
     """
     client = boto3.client('batch')
 
-    def jobdef_exists(client, name):
+    def jobdef_exists(client, name, status=("ACTIVE",)):
         paginator = client.get_paginator('describe_job_definitions')
         def_iterator = paginator.paginate(jobDefinitionName=name)
         found = None
@@ -128,7 +208,7 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
             if len(page_defs) == 0:
                 break
             found = [pdef for pdef in page_defs if
-                     pdef['jobDefinitionName'] == name]
+                     pdef['jobDefinitionName'] == name and pdef['status'] in status]
             if found:
                 break
         if not found:
@@ -141,6 +221,24 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
             logger.info("reusing existing job definition %s (Arn=%s)", name, existing['jobDefinitionArn'])
             return existing
 
+    volumes = [
+        {
+            'host': {
+                'sourcePath': mnt['host_src']
+            },
+            'name': mnt['name'] + "vol"
+        }
+        for mnt in mounts
+    ]
+    mountPoints = [
+        {
+            'containerPath': mnt['dst'],
+            'readOnly': False,
+            'sourceVolume': mnt['name'] + "vol"
+        }
+        for mnt in mounts
+    ]
+
     logger.info("creating job definition %s with image %s...", name, image)
     jd = client.register_job_definition(
         jobDefinitionName=name,
@@ -150,21 +248,8 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
             'vcpus': vcpus,
             'memory': memory,
             'jobRoleArn': jobroleArn,
-            'volumes': [
-                {
-                    'host': {
-                        'sourcePath': "/mnt/fsx1"
-                    },
-                    'name': 'scratchvol'
-                }
-            ],
-            'mountPoints': [
-                {
-                    'containerPath': "/data",
-                    'readOnly': False,
-                    'sourceVolume': 'scratchvol'
-                }
-            ],
+            'volumes': volumes,
+            'mountPoints': mountPoints,
             'privileged': False,
             'ulimits': [
                 { 'name': "core",
@@ -178,7 +263,7 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, reuse=True):
             'attempts': 1
         },
         timeout={
-            'attemptDurationSeconds': 1000
+            'attemptDurationSeconds': 600
         }
     )
     logger.info("job definition %s created (Arn=%s)", name, jd['jobDefinitionArn'])
@@ -233,20 +318,20 @@ def submit_job(name, queue, jobdef, command, vcpu, memory):
 def _setup_jobs(**kwargs):
     role = setup_ecs_role()
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
-    jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, reuse=True)
 
     from bunnies import ComputeEnv
     ce = ComputeEnv("testfsx3")
     ce.create()
-    ce.ready()
 
-    jobqueue = make_jobqueue("bunnies-test-queue", compute_envs=[
-        (ce.name, 100)
-    ])
+    volumes = [{'name': disk['name'], 'host_src': disk['instance_mountpoint'], 'dst': "/data"}
+               for disk in ce.disks.values()]
+    jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, mounts=volumes, reuse=True)
 
-    test_job = submit_job("simple-sleeper", jobqueue['jobQueueArn'], jobdef['jobDefinitionArn'],
-                          ['simple-test-job.sh', '600'], 1, 128)
-    print(test_job)
+    ce.wait_ready()
+
+    result = ce.submit_job("simple-sleeper", jobdef['jobDefinitionArn'],
+                           ['simple-test-job.sh', '600'], 1, 128)
+    print(result)
 
 
 def main():

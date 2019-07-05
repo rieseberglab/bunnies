@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError
 from .config import config
 from . import constants
 from .utils import data_files
+from . import jobs
 
 logger = logging.getLogger(__package__)
 
@@ -102,7 +103,63 @@ def _custom_waiters():
                         "state": "failure"
                     }
                 ]
-            }
+            },
+
+            "ComputeEnvironmentReady": {
+                "delay": 15,
+                "operation": "DescribeComputeEnvironments",
+                "maxAttempts": 40,
+                "acceptors": [
+                    {
+                        "expected": "DISABLED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "computeEnvironments[].state"
+                    },
+                    {
+                        "expected": "CREATING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "computeEnvironments[].status"
+                    },
+                    {
+                        "expected": "UPDATING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "computeEnvironments[].status"
+                    },
+                    {
+                        "expected": "DELETING",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "computeEnvironments[].status"
+                    },
+                    {
+                        "expected": "DELETED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "computeEnvironments[].status"
+                    },
+                    {
+                        "expected": "VALID",
+                        "matcher": "pathAll",
+                        "state": "success",
+                        "argument": "computeEnvironments[].status"
+                    },
+                    {
+                        "expected": "INVALID",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "computeEnvironments[].status"
+                    },
+                    {
+                        "matcher": "path",
+                        "expected": True,
+                        "argument": "length(computeEnvironments[]) > `0`",
+                        "state": "failure"
+                    }
+                ]
+            },
         }
         model = botocore.waiter.WaiterModel({
             "version": 2,
@@ -113,6 +170,15 @@ def _custom_waiters():
 
 
 _custom_waiters.model = None
+
+
+def wait_batch_ce_ready(ce_names):
+    """wait for the given batch environments to be valid and ready ready"""
+    logger.info("waiting for batch environments %s to be ready...", ce_names)
+    client = boto3.client('batch')
+    waiter = botocore.waiter.create_waiter_with_client("ComputeEnvironmentReady", _custom_waiters(), client)
+    waiter.wait(computeEnvironments=ce_names)
+    logger.info("batch environments %s are ready", ce_names)
 
 
 class FSxDisk(object):
@@ -233,7 +299,7 @@ class FSxDisk(object):
     def wait_deleted(self):
         """wait for the filesystem to be deleted completely"""
         client = boto3.client('fsx')
-        waiter = botocore.waiter.create_waiter_with_client("FileSystemReady", _custom_waiters(), client)
+        waiter = botocore.waiter.create_waiter_with_client("FileSystemDeleted", _custom_waiters(), client)
         waiter.wait(FileSystemIds=[self.fsid])
 
 
@@ -243,7 +309,8 @@ def _create_ecs_instance_role():
     ecs_role_name = constants.CE_ECS_INSTANCE_ROLE
     logger.info("creating IAM role %s", ecs_role_name)
     try:
-        with open("../roles/bunnies-ecs-instance-trust-relationship.json", "r") as fd:
+        trust_file = data_files("permissions/%s-ecs-instance-trust-relationship.json" % (constants.PLATFORM,))[0]
+        with open(trust_file, "r") as fd:
             jobs_ecs_trust = fd.read()
 
         client.create_role(Path='/',
@@ -380,6 +447,14 @@ class ComputeEnv(object):
             mount_targets.append(disk['instance_mountpoint'])
             fstab_lines.append(disk['obj'].fstab(disk['instance_mountpoint']))
 
+        # this stuff is run by a tool called cloud-init. it's not exactly obvious to debug because it happens early on
+        # in the game. You can see the logs in the instance at /var/log/cloud-init-output.log And the script ends up
+        # being re-formatted into: /var/lib/cloud/instance/scripts/runcmd
+        #
+        # the syntax is a bit arcane (I think it's yaml). contents are extracted and then "shellified" by a python
+        # program and written to the runcmd script, which is then run by /bin/sh as root.
+        #
+        # FIXME: disallow whitespace and escapes from names provided by the user.
         script = """MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
 
@@ -387,7 +462,10 @@ Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
 Content-Type: text/cloud-config; charset="us-ascii"
 
 runcmd:
-- amazon-linux-extras install -y lustre2.10
+- set -x
+- env
+- : support both Amazon Linux 1 and 2
+- amazon-linux-extras install -y lustre2.10 || yum install -y lustre-client
 %(mkdirs)s
 %(fstabs)s
 %(mount)s
@@ -510,16 +588,43 @@ runcmd:
             iterator = paginator.paginate()
             logger.info("listing compute environments matching %s settings", name)
             found = None
+
+            top_level_match = top_level_match if top_level_match else {}
+            comp_res_match = comp_res_match if comp_res_match else {}
+
             for page in iterator:
                 cenvs = page['computeEnvironments']
                 if len(cenvs) == 0:
                     break
                 for cenv in cenvs:
-                    # match
-                    pass
+                    if not cenv['computeEnvironmentName'].startswith(name + "-"):
+                        continue
+
+                    check_top_level = {k: cenv[k] for k in top_level_match}
+                    if top_level_match != check_top_level:
+                        logger.debug("cannot use compute env %s because of mismatch: got %s, expected %s",
+                                     check_top_level, top_level_match)
+                        continue
+
+                    cr_mismatches = [key for key in comp_res_match
+                                     if key not in cenv['computeResources'] or
+                                     cenv['computeResources'][key] != comp_res_match[key]]
+                    if len(cr_mismatches) > 0:
+                        logger.debug("cannot use compute env %s because of mismatch in compute resources: has %s but needs %s",
+                                     cenv['computeResources'], comp_res_match)
+                        continue
+
+                    found = cenv
+                    break
+
+            if found:
+                logger.info("batch compute environment %s (arn=%s) matches requirements for %s",
+                            found['computeEnvironmentName'], found['computeEnvironmentArn'],
+                            name)
             return found
 
         ce_type = "EC2" # "SPOT"
+
         instance_profile_arn = self.instance_profile['InstanceProfile']['Arn']
         spot_role_arn = self.spot_role['Role']['Arn']
         service_role_arn = self.batch_service_role['Role']['Arn']
@@ -558,6 +663,7 @@ runcmd:
         if existing:
             return existing
 
+        logger.info("creating new batch compute environment associated to name %s", self.name)
         random_name = self.name + "-" + str(uuid4())[0:8]
         client.create_compute_environment(**{
             "computeEnvironmentName": random_name,
@@ -566,11 +672,20 @@ runcmd:
             "computeResources": comp_resources,
             "serviceRole": service_role_arn
         })
-        ces = client.describe_compute_environments(
+        new_env = client.describe_compute_environments(
             computeEnvironments=[random_name]
-        )
-        return ces['computeEnvironments'][0]
+        )['computeEnvironments'][0]
 
+        logger.info("created new batch compute environment name %s (arn=%s)",
+                    new_env['computeEnvironmentName'],
+                    new_env['computeEnvironmentArn'])
+        return new_env
+
+    def _create_job_queue(self):
+        ce_name = self.batch_ce['computeEnvironmentName']
+        jq = jobs.make_jobqueue(ce_name + "-jq",
+                                compute_envs=[(ce_name, 100)])
+        return jq
 
     def create(self):
         """ensure all the entities are created"""
@@ -590,6 +705,11 @@ runcmd:
 
         self.batch_ce = self._create_batch_ce()
 
+        # the compute environment has to be VALID in order for a jobqueue
+        # to be associated with it.
+        wait_batch_ce_ready([self.batch_ce['computeEnvironmentName']])
+        self.job_queue = self._create_job_queue()
+
         logger.info("compute environment %s created", self.name)
 
     def delete(self):
@@ -600,17 +720,35 @@ runcmd:
             dobj = ddict['obj']
             dobj.delete()
 
+        # fixme
+        # - set job queue to disabled
+        # - set compute environment to disabled
+        # - wait for job queue to settle.
+        # - delete job queue
+        # - delete compute env
+        # - delete launch template
+
     def wait_ready(self):
         """ensure all the entities are VALID and ready to execute things"""
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
             dobj.wait_ready()
 
+        wait_batch_ce_ready([self.batch_ce['computeEnvironmentName']])
+        jobs.wait_queue_ready([self.job_queue['jobQueueArn']])
+
+    def submit_job(self, job_name, job_def, command, vcpus, memory):
+        queue_arn = self.job_queue['jobQueueArn']
+        submission = jobs.submit_job(job_name, queue_arn,
+                                     job_def, command,
+                                     vcpus, memory)
+        return submission
+
     def wait_deleted(self):
         """ensure all the entities are deleted completely"""
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
-            dobj.delete()
+            dobj.wait_deleted()
 
 
 def _create_env(envname='', **kwargs):
