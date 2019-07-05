@@ -4,14 +4,19 @@
 """
   Tools for managing a bunnies compute environment
 """
-import boto3
 from uuid import uuid4
 import logging
+import os.path
+
+import base64
+import boto3
+import botocore
+import botocore.waiter
+from botocore.exceptions import ClientError
 
 from .config import config
 from . import constants
-import botocore
-import botocore.waiter
+from .utils import data_files
 
 logger = logging.getLogger(__package__)
 
@@ -110,7 +115,6 @@ def _custom_waiters():
 _custom_waiters.model = None
 
 
-
 class FSxDisk(object):
     def __init__(self, name, size_gb):
         self.name = name
@@ -119,6 +123,10 @@ class FSxDisk(object):
             raise ValueError("disk size should be larger than 0")
         self.__token = str(uuid4())
         self.__fs = None
+
+    @property
+    def capacity(self):
+        return self.size_gb
 
     def retrieve_existing(self):
         # FIXME -- the caller should inspect the state of the returned filesystem
@@ -142,7 +150,7 @@ class FSxDisk(object):
                 kwargs['NextToken'] = resp['NextToken']
             logger.info("listing file systems...")
             page = client.describe_file_systems(**kwargs)
-            logger.info("retrieved page with %d fses", len(page['FileSystems']))
+            logger.info("retrieved page with %d fs(es)", len(page['FileSystems']))
             matches = [candidate for candidate in page['FileSystems']
                        if _tags_match(self.name, candidate['Tags'])]
             if matches:
@@ -156,6 +164,14 @@ class FSxDisk(object):
         if not self.__fs:
             self.__fs = self.retrieve_existing()
         return self.__fs['DNSName']
+
+    def fstab(self, target):
+        """returns the line that should be added to fstab to mount this filesystem onto the target"""
+        return "%(dns)s@tcp:/fsx %(target)s lustre defaults,_netdev 0 0" % {
+            'dns': self.dns_name,
+            'target': target
+        }
+
     @property
     def fsid(self):
         if not self.__fs:
@@ -179,6 +195,7 @@ class FSxDisk(object):
         logger.info("Deleting file system %s (id=%s)...", self.name, fsid)
         client.delete_file_system(FileSystemId=fsid, ClientRequestToken=self.__token)
         self.__fs=None
+
 
     def create(self):
         """
@@ -219,10 +236,11 @@ class FSxDisk(object):
         waiter = botocore.waiter.create_waiter_with_client("FileSystemReady", _custom_waiters(), client)
         waiter.wait(FileSystemIds=[self.fsid])
 
+
 def _create_ecs_instance_role():
     # create ecs instance role
     client = boto3.client("iam")
-    ecs_role_name = constants.BUNNIES_ECS_INSTANCE_ROLE
+    ecs_role_name = constants.CE_ECS_INSTANCE_ROLE
     logger.info("creating IAM role %s", ecs_role_name)
     try:
         with open("../roles/bunnies-ecs-instance-trust-relationship.json", "r") as fd:
@@ -230,9 +248,9 @@ def _create_ecs_instance_role():
 
         client.create_role(Path='/',
                            RoleName=ecs_role_name,
-                           Description="Role to assign ECS instances spawned by bunnies platform",
-                           AssumeRolePolicyDocument=json.dumps(jobs_ecs_trust),
-                           Tags=[{'Key':'platform', 'Value': 'bunnies'}])
+                           Description="Role to assign ECS instances spawned by %s platform" % (constants.PLATFORM,),
+                           AssumeRolePolicyDocument=jobs_ecs_trust,
+                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
         logger.info("IAM role %s created", ecs_role_name)
     except ClientError as clierr:
         if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
@@ -246,71 +264,331 @@ def _create_ecs_instance_role():
 
     return client.get_role(RoleName=ecs_role_name)
 
+
 def _create_ec2_spot_fleet_role():
     # allow bunnies ec2 to join spot fleets
     client = boto3.client("iam")
-    ecs_role_name = constants.BUNNIES_ECS_INSTANCE_ROLE
-    logger.info("creating IAM role %s", ecs_role_name)
+    role_name = constants.CE_SPOT_ROLE
+    logger.info("creating IAM role %s", role_name)
     try:
-        with open("../roles/bunnies-ecs-instance-trust-relationship.json", "r") as fd:
-            jobs_ecs_trust = fd.read()
+        policy_document = '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 
         client.create_role(Path='/',
-                           RoleName=ecs_role_name,
-                           Description="Role to assign ECS instances spawned by bunnies platform",
-                           AssumeRolePolicyDocument=json.dumps(jobs_ecs_trust),
-                           Tags=[{'Key':'platform', 'Value': 'bunnies'}])
-        logger.info("IAM role %s created", ecs_role_name)
+                           RoleName=role_name,
+                           Description="allow %s ec2 instances to join spot fleets" % (constants.PLATFORM,),
+                           AssumeRolePolicyDocument=policy_document,
+                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
+        logger.info("IAM role %s created", role_name)
     except ClientError as clierr:
         if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
-            logger.info("using existing role %s", ecs_role_name)
+            logger.info("using existing role %s", role_name)
             pass
         else:
             raise
-    
-# create EC2 spot fleet role
-if ! aws iam list-roles | egrep -q "\b${cespotrolename}\b"; then
-    aws iam create-role \
-	--role-name "${cespotrolename}" \
-	--path / \
-	--description "allow bunnies ec2 instances to join spot fleets" \
-	--assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-	--tags Key=Platform,Value=bunnies
-fi
-spotrolearn=$(aws iam get-role --role-name "${cespotrolename}" --query Role.Arn --output text)
 
-aws iam attach-role-policy \
-    --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole \
-    --role-name "${cespotrolename}"
+    # you can attach the same role multiple times without effect
+    client.attach_role_policy(RoleName=role_name,
+                              PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole")
+    return client.get_role(RoleName=role_name)
 
-# create service role to allow aws to make Batch calls on your behalf.
-if ! aws iam list-roles | egrep -q "\b${cebatchservicerolename}\b"; then
-    aws iam create-role \
-	--role-name "${cebatchservicerolename}" \
-	--path "/service-role/" \
-	--description "allow aws to issue batch calls on behalf of user" \
-	--assume-role-policy-document file://"${SCRIPTSDIR}"/../roles/bunnies-batch-service-role-trust-relationship.json
-fi
+
+def _create_batch_service_role():
+    # allow aws to issue batch calls for bunnies
+    client = boto3.client("iam")
+    role_name = constants.CE_BATCH_SERVICE_ROLE
+
+    logger.info("creating IAM role %s", role_name)
+    try:
+        trustfile = data_files(os.path.join("permissions", role_name + "-trust-relationship.json"))[0]
+        with open(trustfile, "r") as fd:
+            policy_document = fd.read()
+
+        client.create_role(Path='/service-role/',
+                           RoleName=role_name,
+                           Description="allow aws to issue batch calls on behalf of %s user" % (constants.PLATFORM,),
+                           AssumeRolePolicyDocument=policy_document,
+                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
+        logger.info("IAM role %s created", role_name)
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing role %s", role_name)
+            pass
+        else:
+            raise
+
+    # you can attach the same role multiple times without effect
+    client.attach_role_policy(RoleName=role_name,
+                              PolicyArn="arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole")
+
+    return client.get_role(RoleName=role_name)
+
+
+def _create_batch_instance_profile(instance_role_name):
+    profile_name = constants.CE_INSTANCE_PROFILE
+    client = boto3.client("iam")
+    try:
+        logger.info("creating instance profile %s", profile_name)
+        client.create_instance_profile(InstanceProfileName=profile_name, Path="/")
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing instance profile %s", profile_name)
+            pass
+        else:
+            raise
+
+    try:
+        logger.info("adding role %s to instance profile %s", instance_role_name, profile_name)
+        client.add_role_to_instance_profile(InstanceProfileName=profile_name,
+                                            RoleName=instance_role_name)
+        logger.info("role added")
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == "LimitExceeded":
+            logger.info("skipped. instance profile already has a role attached")
+        else:
+            raise
+
+    return client.get_instance_profile(InstanceProfileName=profile_name)
 
 
 class ComputeEnv(object):
     def __init__(self, name, scratch_size_gb=3600):
         self.name = name
         self.disks = {}
+        self.instance_role = None
+        self.spot_role = None
+        self.batch_service_role = None
+        self.instance_profile = None
+        self.launch_template = None
+        self.batch_ce = None
+
         if scratch_size_gb > 0:
             self.disks['scratch'] = {
-                'name': name + "-scratch",
+                'name': "scratch",
                 'obj': FSxDisk(name + "-scratch", scratch_size_gb),
                 'instance_mountpoint': "/mnt/" + name + "-scratch"
             }
+
+    def _generate_instance_boot_script(self):
+        """generates a cloud config script which mounts configured filesystems"""
+
+        def _cmdsplit(lis):
+            return "\n".join(["- %s" % (x,) for x in lis])
+
+        mount_targets = []
+        fstab_lines = []
+        for diskname, disk in self.disks.items():
+            mount_targets.append(disk['instance_mountpoint'])
+            fstab_lines.append(disk['obj'].fstab(disk['instance_mountpoint']))
+
+        script = """MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+--==MYBOUNDARY==
+Content-Type: text/cloud-config; charset="us-ascii"
+
+runcmd:
+- amazon-linux-extras install -y lustre2.10
+%(mkdirs)s
+%(fstabs)s
+%(mount)s
+
+--==MYBOUNDARY==
+""" % {
+        "mkdirs": _cmdsplit(["mkdir -p %s" % (mtpoint,) for mtpoint in mount_targets]),
+        "fstabs": _cmdsplit(["echo %s >> /etc/fstab" % (fstab,) for fstab in fstab_lines]),
+        "mount": "- :" if len(self.disks) == 0 else "- mount -a -t lustre defaults"
+      }
+
+        logger.debug("using the following instance launch script: %s", script)
+        return script
+
+    def _create_launch_template(self):
+        """returns launch template id and version to use"""
+
+        def _matching_template(client, name, tags, userdata_b64):
+            """iterate through template versions with that name, and find the first one where
+               tags match exactly and the userdata is the same.
+            """
+            paginator = client.get_paginator("describe_launch_template_versions")
+            template_iterator = paginator.paginate(LaunchTemplateName=name)
+            found = None
+
+            tag_dict = {x[0]: x[1] for x in tags}
+            for page in template_iterator:
+                versions = page['LaunchTemplateVersions']
+                if len(versions) == 0:
+                    break
+                for version in versions:
+                    check_data = version['LaunchTemplateData']['UserData']
+                    if userdata_b64 is not None and check_data != userdata_b64:
+                        continue
+
+                    instance_tags = [specs['Tags'] for specs in version['LaunchTemplateData']['TagSpecifications']
+                                     if specs['ResourceType'] == "instance"][0]
+
+                    check_dict = {x['Key']: x['Value'] for x in instance_tags}
+                    if check_dict == tag_dict:
+                        found = version
+                        break
+                    else:
+                        logger.debug("launch template mismatch. skipping. found %s, but query is %s",
+                                     check_dict, tag_dict)
+                return found
+
+        lt_name = "%s-ce-launch-template-%s" % (constants.PLATFORM, self.name)
+
+        instance_tags = [("platform", constants.PLATFORM),
+                         ("compute_environment", lt_name)]
+
+        for diskname, disk in self.disks.items():
+            dnstag = ("disk-dns-%s" % (diskname,), disk['obj'].dns_name)
+            dirtag = ("disk-dir-%s" % (diskname,), disk['instance_mountpoint'])
+            instance_tags += [dnstag, dirtag]
+
+        client = boto3.client("ec2")
+        lt_userdata = self._generate_instance_boot_script()
+
+        logger.info("creating ec2 launch template %s for environment %s", lt_name, self.name)
+
+        b64data = base64.b64encode(lt_userdata.encode("ascii")).decode('ascii')
+        call_params = {
+            "LaunchTemplateName": lt_name,
+            "VersionDescription": "adds lustre filesystems to default environment",
+            "LaunchTemplateData": {
+                "UserData": b64data,
+                "TagSpecifications": [
+                    {
+                        "ResourceType": "instance",
+                        "Tags": [{'Key': x[0], 'Value': x[1]} for x in instance_tags]
+                    }
+                ]
+            }
+        }
+
+        version_number = 0
+
+        try:
+            template = client.create_launch_template(**call_params)
+            info = template['LaunchTemplate']
+            logger.debug("created new template: %s", info)
+            version_number = 1
+        except ClientError as clierr:
+            if clierr.response['Error']['Code'] == "InvalidLaunchTemplateName.AlreadyExistsException":
+                logger.info("a template already exists with name %s", lt_name)
+                template = None
+            else:
+                logger.error("can't create template %s", lt_name, exc_info=clierr)
+                raise
+
+        if template is None:
+            # see if a compatible template exists with the same name
+            template = _matching_template(client, lt_name, instance_tags, b64data)
+            if template is not None:
+                info = template
+                version_number = info['VersionNumber']
+                logger.info("reusing existing compatible template %s (id=%s version=%s)",
+                            lt_name, template['LaunchTemplateId'], version_number)
+
+        if template is None:
+            # make a new version of the same template
+            logger.info("none of the existing name=%s templates are compatible. creating new version", lt_name)
+            template = client.create_launch_template_version(**call_params)
+            info = template['LaunchTemplateVersion']
+            logger.debug("created new template version: %s", template)
+            version_number = info['VersionNumber']
+
+        logger.info("using launch template %s (id=%s version=%s)",
+                    lt_name, info['LaunchTemplateId'], version_number)
+        return info['LaunchTemplateId'], version_number
+
+    def _create_batch_ce(self):
+        client = boto3.client("batch")
+
+        def _find_matching(name, top_level_match, comp_res_match):
+            # find a compute environment which matches the given settings
+            paginator = client.get_paginator("describe_compute_environments")
+            iterator = paginator.paginate()
+            logger.info("listing compute environments matching %s settings", name)
+            found = None
+            for page in iterator:
+                cenvs = page['computeEnvironments']
+                if len(cenvs) == 0:
+                    break
+                for cenv in cenvs:
+                    # match
+                    pass
+            return found
+
+        ce_type = "EC2" # "SPOT"
+        instance_profile_arn = self.instance_profile['InstanceProfile']['Arn']
+        spot_role_arn = self.spot_role['Role']['Arn']
+        service_role_arn = self.batch_service_role['Role']['Arn']
+
+        lt_id, lt_version = self._create_launch_template()
+
+        comp_resources = {
+                "type": ce_type,
+                "minvCpus": 0,
+                "maxvCpus": 256,
+                "desiredvCpus": 0,
+                "instanceTypes": [
+                    "optimal"
+                ],
+                "subnets": [
+                    get_subnet_id()
+                ],
+                "securityGroupIds": [
+                    get_security_group_id()
+                ],
+                "ec2KeyPair": get_key_name(),
+                "instanceRole": instance_profile_arn,
+                "tags": {
+                    "platform": constants.PLATFORM,
+                    "ce_name": self.name
+                },
+                "bidPercentage": 100,
+                "spotIamFleetRole": spot_role_arn,
+                "launchTemplate": {
+                    "launchTemplateId": lt_id,
+                    "version": str(lt_version)
+                }
+        }
+
+        existing = _find_matching(self.name, {"serviceRole": service_role_arn, "type": "MANAGED"}, comp_resources)
+        if existing:
+            return existing
+
+        random_name = self.name + "-" + str(uuid4())[0:8]
+        client.create_compute_environment(**{
+            "computeEnvironmentName": random_name,
+            "type": "MANAGED",
+            "state": "ENABLED",
+            "computeResources": comp_resources,
+            "serviceRole": service_role_arn
+        })
+        ces = client.describe_compute_environments(
+            computeEnvironments=[random_name]
+        )
+        return ces['computeEnvironments'][0]
+
 
     def create(self):
         """ensure all the entities are created"""
         logger.info("creating compute environment %s", self.name)
 
+        # start block -- following is common to all envs
+        self.instance_role = _create_ecs_instance_role()
+        self.spot_role = _create_ec2_spot_fleet_role()
+        self.batch_service_role = _create_batch_service_role()
+        self.instance_profile = _create_batch_instance_profile(self.instance_role['Role']['RoleName'])
+        # end block
+
+        # create disks
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
             dobj.create()
+
+        self.batch_ce = self._create_batch_ce()
 
         logger.info("compute environment %s created", self.name)
 
@@ -341,11 +619,13 @@ def _create_env(envname='', **kwargs):
     myenv.create()
     myenv.wait_ready()
 
+
 def _delete_env(envname='', **kwargs):
     """tear down an environment"""
     myenv = ComputeEnv(envname)
     myenv.delete()
     myenv.wait_deleted()
+
 
 def main():
     import argparse

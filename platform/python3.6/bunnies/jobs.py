@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 import boto3
 from .constants import PLATFORM
+from .utils import data_files
 import json
 import logging
 import os.path
-import glob
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__package__)
 
-
-def permissions_files(rolename):
-    here = os.path.dirname(__file__)
-    perms_dir = os.path.join(here, "data", "permissions")
-    matches = [permfile for permfile in glob.glob(os.path.join(perms_dir, "*-permissions.json"))
-               if os.path.basename(permfile).startswith(rolename)]
-    return matches
 
 def setup_ecs_role():
     ecs_role_name = PLATFORM + "-ecs"
@@ -48,8 +41,8 @@ def setup_ecs_role():
             pass
         else:
             raise
-            
-    for pfile in permissions_files(PLATFORM + "-ecs"):
+
+    for pfile in data_files(os.path.join("permissions", PLATFORM + "-ecs-*-permissions.json")):
         basename = os.path.basename(pfile)
         noext = os.path.splitext(basename)[0]
         logger.info("adding policy %s to role %s", os.path.basename(pfile), ecs_role_name)
@@ -244,9 +237,13 @@ def _setup_jobs(**kwargs):
 
     from bunnies import ComputeEnv
     ce = ComputeEnv("testfsx3")
+    ce.create()
+    ce.ready()
+
     jobqueue = make_jobqueue("bunnies-test-queue", compute_envs=[
-        ("testfsx3", 100)
+        (ce.name, 100)
     ])
+
     test_job = submit_job("simple-sleeper", jobqueue['jobQueueArn'], jobdef['jobDefinitionArn'],
                           ['simple-test-job.sh', '600'], 1, 128)
     print(test_job)

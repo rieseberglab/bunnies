@@ -11,12 +11,20 @@ import json
 import logging
 import boto3
 import base64
+import glob
 
 from botocore.exceptions import ClientError
 from .exc import NoSuchFile
 
 logger = logging.getLogger(__package__)
 
+
+def data_files(globname):
+    """retrieves filenames under the data directory, matching the given file glob pattern (relative to the data dir)"""
+    here = os.path.dirname(__file__)
+    data_dir = os.path.join(here, "data")
+    matches = [permfile for permfile in glob.glob(os.path.join(data_dir, globname))]
+    return matches
 
 def find_config_file(startdir, filname):
     """recurse in folder and parents to find filname and open it"""
