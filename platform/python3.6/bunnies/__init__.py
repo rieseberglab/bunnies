@@ -22,4 +22,4 @@ from .pipeline import build_target
 from .data_import import DataImport
 from .environment import ComputeEnv
 
-from .logging import setup_logging
+from .logging_ import setup_logging
