@@ -295,6 +295,7 @@ class FSxDisk(object):
         client = boto3.client('fsx')
         waiter = botocore.waiter.create_waiter_with_client("FileSystemReady", _custom_waiters(), client)
         waiter.wait(FileSystemIds=[self.fsid])
+        logger.info("filesystem(s) %s (id=%s) ready", self.name, self.fsid)
 
     def wait_deleted(self):
         """wait for the filesystem to be deleted completely"""
@@ -303,128 +304,10 @@ class FSxDisk(object):
         waiter.wait(FileSystemIds=[self.fsid])
 
 
-def _create_ecs_instance_role():
-    # create ecs instance role
-    client = boto3.client("iam")
-    ecs_role_name = constants.CE_ECS_INSTANCE_ROLE
-    logger.info("creating IAM role %s", ecs_role_name)
-    try:
-        trust_file = data_files("permissions/%s-ecs-instance-trust-relationship.json" % (constants.PLATFORM,))[0]
-        with open(trust_file, "r") as fd:
-            jobs_ecs_trust = fd.read()
-
-        client.create_role(Path='/',
-                           RoleName=ecs_role_name,
-                           Description="Role to assign ECS instances spawned by %s platform" % (constants.PLATFORM,),
-                           AssumeRolePolicyDocument=jobs_ecs_trust,
-                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
-        logger.info("IAM role %s created", ecs_role_name)
-    except ClientError as clierr:
-        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
-            logger.info("using existing role %s", ecs_role_name)
-            pass
-        else:
-            raise
-
-    client.attach_role_policy(RoleName=ecs_role_name,
-                              PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role")
-
-    return client.get_role(RoleName=ecs_role_name)
-
-
-def _create_ec2_spot_fleet_role():
-    # allow bunnies ec2 to join spot fleets
-    client = boto3.client("iam")
-    role_name = constants.CE_SPOT_ROLE
-    logger.info("creating IAM role %s", role_name)
-    try:
-        policy_document = '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
-
-        client.create_role(Path='/',
-                           RoleName=role_name,
-                           Description="allow %s ec2 instances to join spot fleets" % (constants.PLATFORM,),
-                           AssumeRolePolicyDocument=policy_document,
-                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
-        logger.info("IAM role %s created", role_name)
-    except ClientError as clierr:
-        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
-            logger.info("using existing role %s", role_name)
-            pass
-        else:
-            raise
-
-    # you can attach the same role multiple times without effect
-    client.attach_role_policy(RoleName=role_name,
-                              PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole")
-    return client.get_role(RoleName=role_name)
-
-
-def _create_batch_service_role():
-    # allow aws to issue batch calls for bunnies
-    client = boto3.client("iam")
-    role_name = constants.CE_BATCH_SERVICE_ROLE
-
-    logger.info("creating IAM role %s", role_name)
-    try:
-        trustfile = data_files(os.path.join("permissions", role_name + "-trust-relationship.json"))[0]
-        with open(trustfile, "r") as fd:
-            policy_document = fd.read()
-
-        client.create_role(Path='/service-role/',
-                           RoleName=role_name,
-                           Description="allow aws to issue batch calls on behalf of %s user" % (constants.PLATFORM,),
-                           AssumeRolePolicyDocument=policy_document,
-                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
-        logger.info("IAM role %s created", role_name)
-    except ClientError as clierr:
-        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
-            logger.info("using existing role %s", role_name)
-            pass
-        else:
-            raise
-
-    # you can attach the same role multiple times without effect
-    client.attach_role_policy(RoleName=role_name,
-                              PolicyArn="arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole")
-
-    return client.get_role(RoleName=role_name)
-
-
-def _create_batch_instance_profile(instance_role_name):
-    profile_name = constants.CE_INSTANCE_PROFILE
-    client = boto3.client("iam")
-    try:
-        logger.info("creating instance profile %s", profile_name)
-        client.create_instance_profile(InstanceProfileName=profile_name, Path="/")
-    except ClientError as clierr:
-        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
-            logger.info("using existing instance profile %s", profile_name)
-            pass
-        else:
-            raise
-
-    try:
-        logger.info("adding role %s to instance profile %s", instance_role_name, profile_name)
-        client.add_role_to_instance_profile(InstanceProfileName=profile_name,
-                                            RoleName=instance_role_name)
-        logger.info("role added")
-    except ClientError as clierr:
-        if clierr.response['Error']['Code'] == "LimitExceeded":
-            logger.info("skipped. instance profile already has a role attached")
-        else:
-            raise
-
-    return client.get_instance_profile(InstanceProfileName=profile_name)
-
-
 class ComputeEnv(object):
     def __init__(self, name, scratch_size_gb=3600):
         self.name = name
         self.disks = {}
-        self.instance_role = None
-        self.spot_role = None
-        self.batch_service_role = None
-        self.instance_profile = None
         self.launch_template = None
         self.batch_ce = None
 
@@ -434,6 +317,12 @@ class ComputeEnv(object):
                 'obj': FSxDisk(name + "-scratch", scratch_size_gb),
                 'instance_mountpoint': "/mnt/" + name + "-scratch"
             }
+
+    def get_disk(self, diskname):
+        if diskname in self.disks:
+            return dict(self.disks[diskname])
+        else:
+            return None
 
     def _generate_instance_boot_script(self):
         """generates a cloud config script which mounts configured filesystems"""
@@ -451,7 +340,7 @@ class ComputeEnv(object):
         # in the game. You can see the logs in the instance at /var/log/cloud-init-output.log And the script ends up
         # being re-formatted into: /var/lib/cloud/instance/scripts/runcmd
         #
-        # the syntax is a bit arcane (I think it's yaml). contents are extracted and then "shellified" by a python
+        # the syntax is a bit arcane (it's yaml). contents are extracted and then "shellified" by a python
         # program and written to the runcmd script, which is then run by /bin/sh as root.
         #
         # FIXME: disallow whitespace and escapes from names provided by the user.
@@ -462,19 +351,19 @@ Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
 Content-Type: text/cloud-config; charset="us-ascii"
 
 runcmd:
-- set -x
-- env
-- : support both Amazon Linux 1 and 2
-- amazon-linux-extras install -y lustre2.10 || yum install -y lustre-client
+- [ "set", "-x"]
+- [ "env" ]
+- [ ":", "support both Amazon Linux 1 and 2" ]
+- [ "sh", "-c", "amazon-linux-extras install -y lustre2.10 || yum install -y lustre-client" ]
 %(mkdirs)s
 %(fstabs)s
 %(mount)s
 
 --==MYBOUNDARY==
 """ % {
-        "mkdirs": _cmdsplit(["mkdir -p %s" % (mtpoint,) for mtpoint in mount_targets]),
-        "fstabs": _cmdsplit(["echo %s >> /etc/fstab" % (fstab,) for fstab in fstab_lines]),
-        "mount": "- :" if len(self.disks) == 0 else "- mount -a -t lustre defaults"
+        "mkdirs": _cmdsplit(["[mkdir, -p, %s]" % (mtpoint,) for mtpoint in mount_targets]),
+        "fstabs": _cmdsplit(["""[sh, -c, "echo %s >> /etc/fstab"]""" % (fstab,) for fstab in fstab_lines]),
+        "mount": "- [\":\"]" if len(self.disks) == 0 else """- [mount, "-a", "-t", lustre, defaults]"""
       }
 
         logger.debug("using the following instance launch script: %s", script)
@@ -625,9 +514,9 @@ runcmd:
 
         ce_type = "EC2" # "SPOT"
 
-        instance_profile_arn = self.instance_profile['InstanceProfile']['Arn']
-        spot_role_arn = self.spot_role['Role']['Arn']
-        service_role_arn = self.batch_service_role['Role']['Arn']
+        instance_profile_arn = config['batch_instance_profile_arn']
+        spot_role_arn = config['spot_fleet_role_arn']
+        service_role_arn = config['batch_service_role_arn']
 
         lt_id, lt_version = self._create_launch_template()
 
@@ -691,13 +580,6 @@ runcmd:
         """ensure all the entities are created"""
         logger.info("creating compute environment %s", self.name)
 
-        # start block -- following is common to all envs
-        self.instance_role = _create_ecs_instance_role()
-        self.spot_role = _create_ec2_spot_fleet_role()
-        self.batch_service_role = _create_batch_service_role()
-        self.instance_profile = _create_batch_instance_profile(self.instance_role['Role']['RoleName'])
-        # end block
-
         # create disks
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
@@ -708,6 +590,7 @@ runcmd:
         # the compute environment has to be VALID in order for a jobqueue
         # to be associated with it.
         wait_batch_ce_ready([self.batch_ce['computeEnvironmentName']])
+
         self.job_queue = self._create_job_queue()
 
         logger.info("compute environment %s created", self.name)
@@ -751,6 +634,147 @@ runcmd:
             dobj.wait_deleted()
 
 
+def _create_ecs_instance_role():
+    # create ecs instance role
+    client = boto3.client("iam")
+    ecs_role_name = constants.CE_ECS_INSTANCE_ROLE
+    logger.info("creating IAM role %s", ecs_role_name)
+    try:
+        trust_file = data_files("permissions/%s-ecs-instance-trust-relationship.json" % (constants.PLATFORM,))[0]
+        with open(trust_file, "r") as fd:
+            jobs_ecs_trust = fd.read()
+
+        client.create_role(Path='/',
+                           RoleName=ecs_role_name,
+                           Description="Role to assign ECS instances spawned by %s platform" % (constants.PLATFORM,),
+                           AssumeRolePolicyDocument=jobs_ecs_trust,
+                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
+        logger.info("IAM role %s created", ecs_role_name)
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing role %s", ecs_role_name)
+            pass
+        else:
+            raise
+
+    client.attach_role_policy(RoleName=ecs_role_name,
+                              PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role")
+
+    return client.get_role(RoleName=ecs_role_name)
+
+
+def _create_ec2_spot_fleet_role():
+    # allow bunnies ec2 to join spot fleets
+    client = boto3.client("iam")
+    role_name = constants.CE_SPOT_ROLE
+    logger.info("creating IAM role %s", role_name)
+    try:
+        policy_document = '{"Version":"2012-10-17","Statement":[{"Sid":"","Effect":"Allow","Principal":{"Service":"spotfleet.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+
+        client.create_role(Path='/',
+                           RoleName=role_name,
+                           Description="allow %s ec2 instances to join spot fleets" % (constants.PLATFORM,),
+                           AssumeRolePolicyDocument=policy_document,
+                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
+        logger.info("IAM role %s created", role_name)
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing role %s", role_name)
+            pass
+        else:
+            raise
+
+    # you can attach the same role multiple times without effect
+    client.attach_role_policy(RoleName=role_name,
+                              PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole")
+    return client.get_role(RoleName=role_name)
+
+
+def _create_batch_service_role():
+    # allow aws to issue batch calls for bunnies
+    client = boto3.client("iam")
+    role_name = constants.CE_BATCH_SERVICE_ROLE
+
+    logger.info("creating IAM role %s", role_name)
+    try:
+        trustfile = data_files(os.path.join("permissions", role_name + "-trust-relationship.json"))[0]
+        with open(trustfile, "r") as fd:
+            policy_document = fd.read()
+
+        client.create_role(Path='/service-role/',
+                           RoleName=role_name,
+                           Description="allow aws to issue batch calls on behalf of %s user" % (constants.PLATFORM,),
+                           AssumeRolePolicyDocument=policy_document,
+                           Tags=[{'Key': 'platform', 'Value': constants.PLATFORM}])
+        logger.info("IAM role %s created", role_name)
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing role %s", role_name)
+            pass
+        else:
+            raise
+
+    # you can attach the same role multiple times without effect
+    client.attach_role_policy(RoleName=role_name,
+                              PolicyArn="arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole")
+
+    return client.get_role(RoleName=role_name)
+
+
+def _create_batch_instance_profile(instance_role_name):
+    profile_name = constants.CE_INSTANCE_PROFILE
+    client = boto3.client("iam")
+    try:
+        logger.info("creating instance profile %s", profile_name)
+        client.create_instance_profile(InstanceProfileName=profile_name, Path="/")
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == 'EntityAlreadyExists':
+            logger.info("using existing instance profile %s", profile_name)
+            pass
+        else:
+            raise
+
+    try:
+        logger.info("adding role %s to instance profile %s", instance_role_name, profile_name)
+        client.add_role_to_instance_profile(InstanceProfileName=profile_name,
+                                            RoleName=instance_role_name)
+        logger.info("role added")
+    except ClientError as clierr:
+        if clierr.response['Error']['Code'] == "LimitExceeded":
+            logger.info("skipped. instance profile already has a role attached")
+        else:
+            raise
+
+    return client.get_instance_profile(InstanceProfileName=profile_name)
+
+
+def _setup_roles(**kwargs):
+    instance_role = _create_ecs_instance_role()
+    spot_role = _create_ec2_spot_fleet_role()
+    batch_service_role = _create_batch_service_role()
+    instance_profile = _create_batch_instance_profile(instance_role['Role']['RoleName'])
+    job_role = jobs.create_job_role()
+
+    role_settings = {
+        'instance_role_name': instance_role['Role']['RoleName'],
+        'instance_role_arn': instance_role['Role']['Arn'],
+        'batch_service_role_name': batch_service_role['Role']['RoleName'],
+        'batch_service_role_arn': batch_service_role['Role']['Arn'],
+        'spot_fleet_role_name': spot_role['Role']['RoleName'],
+        'spot_fleet_role_arn': spot_role['Role']['Arn'],
+        'batch_instance_profile_name': instance_profile['InstanceProfile']['InstanceProfileName'],
+        'batch_instance_profile_arn': instance_profile['InstanceProfile']['Arn'],
+        'job_role_name': job_role['Role']['RoleName'],
+        'job_role_arn': job_role['Role']['Arn']
+    }
+    import json
+    outfile = "environment-settings.json"
+    with open(outfile, "w") as envfd:
+        envfd.write(json.dumps(role_settings, indent=4, sort_keys=True, separators=(',', ': ')))
+    logger.info("environment settings written to %s: %s", outfile,
+                role_settings)
+
+
 def _create_env(envname='', **kwargs):
     """create an environment and wait for it to be ready"""
     myenv = ComputeEnv(envname)
@@ -786,6 +810,10 @@ def main():
     subp = subparsers.add_parser("delete", help="delete/teardown a compute environment")
     subp.add_argument("envname", metavar="ENVNAME", type=str, help="the name of the environment")
 
+    subp = subparsers.add_parser("setup", help="setup roles and permissions to support compute environments",
+                                 description="This creates the roles and permissions to create compute environments. "
+                                 "You would call this once before using the platform, and forget about it.")
+
     args = parser.parse_args(sys.argv[1:])
 
     if args.command is None:
@@ -794,6 +822,7 @@ def main():
         sys.exit(1)
 
     func = {
+        'setup': _setup_roles,
         'create': _create_env,
         'delete': _delete_env
     }.get(args.command)

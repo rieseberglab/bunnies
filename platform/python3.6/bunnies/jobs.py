@@ -7,7 +7,6 @@ import logging
 import os.path
 import botocore.waiter
 from botocore.exceptions import ClientError
-
 logger = logging.getLogger(__package__)
 
 
@@ -81,7 +80,7 @@ def _custom_waiters():
 _custom_waiters.model = None
 
 
-def setup_ecs_role():
+def create_job_role():
     ecs_role_name = PLATFORM + "-ecs"
 
     jobs_ecs_trust = {
@@ -194,7 +193,7 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
       jobroleArn: role to assign the ECS container that will be started
       image: the name of the container image
       vcpus: default number of vcpus
-      memory: default amount of memory
+      memory: default amount of memory in MB
       mounts: [{ name: "foo", "host_src": "/path/on/host", "dst": "/path/in/container" }, ...]
     """
     client = boto3.client('batch')
@@ -270,7 +269,7 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
     return jd
 
 
-def submit_job(name, queue, jobdef, command, vcpu, memory):
+def submit_job(name, queue, jobdef, command, vcpu, memory, timeout_secs=1000):
     """
     args:
       name: name of the job
@@ -308,24 +307,26 @@ def submit_job(name, queue, jobdef, command, vcpu, memory):
             'attempts': 1
         },
         timeout={
-            'attemptDurationSeconds': 1000
+            'attemptDurationSeconds': timeout_secs
         }
     )
-    logger.info("job %s submitted", submission)
+    logger.info("job submitted %s", submission)
     return submission
 
 
-def _setup_jobs(**kwargs):
-    role = setup_ecs_role()
+def _test_jobs(**kwargs):
+    from .config import config
+    role = config['job_role_arn']
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
 
     from bunnies import ComputeEnv
     ce = ComputeEnv("testfsx3")
     ce.create()
 
-    volumes = [{'name': disk['name'], 'host_src': disk['instance_mountpoint'], 'dst': "/data"}
+    volumes = [{'name': disk['name'], 'host_src': disk['instance_mountpoint'], 'dst': "/scratch"}
                for disk in ce.disks.values()]
-    jobdef = make_jobdef("bunnies-test-jobdef", role['Role']['Arn'], image, mounts=volumes, reuse=True)
+
+    jobdef = make_jobdef("bunnies-test-jobdef", role, image, mounts=volumes, reuse=True)
 
     ce.wait_ready()
 
@@ -344,10 +345,7 @@ def main():
 
     subparsers = parser.add_subparsers(help="sub-command help", dest="command")
 
-    subp = subparsers.add_parser("setup", help="setup entities needed for launching jobs")
-
-    subp = subparsers.add_parser("delete", help="delete/teardown a compute environment")
-    subp.add_argument("envname", metavar="ENVNAME", type=str, help="the name of the environment")
+    subp = subparsers.add_parser("test", help="setup entities needed for launching jobs")
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -357,7 +355,7 @@ def main():
         sys.exit(1)
 
     func = {
-        'setup': _setup_jobs,
+        'test': _test_jobs,
     }.get(args.command)
     retcode = func(**vars(args))
     sys.exit(int(retcode) if retcode is not None else 0)

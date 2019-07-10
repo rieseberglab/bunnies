@@ -109,3 +109,6 @@ These resources are created using the scripts provided in
 
    - `./scripts/setup-key-pair.sh` creates the keypair that will be associated with the new instances. This will be the key to use
      to ssh into the created VMs or containers. Outputs `./key-pair-settings.json` and `key-pair.pem` private key.
+
+   - `python -m bunnies.environment setup` will create amazon roles and permissions necessary for scheduling instances and submit
+      jobs in the context of a compute environment.

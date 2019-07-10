@@ -62,28 +62,8 @@ pipeline = bunnies.build_target(all_merged)
 # a URL where we can see details and progress in the browser
 # print(pipeline.dashboard_url())
 
-compute_env = bunnies.ComputeEnv("merge-example")
-compute_env.create()
-compute_env.create()
-compute_env.delete()
+print(pipeline)
 
-task_resp = bunnies.execute.ecs_run_task("align-task", {
-    "containerOverrides": [
-        {
-            'name': 'main',  # name of container config to override. from task definition.
-            'environment': [
-                {
-                    'name': "JOBSPEC",
-                    'value': "TEST LAUNCH"
-                }
-            ],
-        }
-    ]
-})
-
-
-#print(task_resp)
-
-#bunnies.execute.ecs_wait_for_tasks([task_resp])
-
+#compute_env = bunnies.ComputeEnv("merge-example")
+#compute_env.create()
 

@@ -1,4 +1,5 @@
 import os
+import sys
 import os.path
 import json
 
@@ -18,6 +19,7 @@ def _load_config():
         ("network", "network-settings.json"),
         ("storage", "storage-settings.json"),
         ("key",     "key-pair-settings.json"),
+        ("environment", "environment-settings.json")
     )
 
     for name, target in search_for:
@@ -26,7 +28,8 @@ def _load_config():
         try:
             infd = utils.find_config_file(startdir, target)
             if infd is None:
-                raise exc.BunniesException("couldn't load %s file %s" % (name, target))
+                sys.stderr.write("Warning: could not load %s file %s\n" % (name, target))
+                continue
             try:
                 doc = json.load(infd)
             except json.decoder.JSONDecodeError as decodeErr:

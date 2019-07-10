@@ -84,6 +84,17 @@ class Input(Cacheable):
             "desc": self.desc
         }
 
+class NamedOutput(object):
+    """Specifies an output for a given transformation.  The output path provides a specification of how to retrieve the
+       produced output resource from the results of a transformation.
+    """
+    __slots__ = ('name', 'path', 'desc')
+
+    def __init__(self, name, path, desc=""):
+        self.name = name
+        self.path = path
+        self.desc = desc
+
 class Transform(Cacheable):
     """A transformation of inputs performed by a program,
        with the given parameters
@@ -97,10 +108,14 @@ class Transform(Cacheable):
         self.version = version
         self.image = image
         self.inputs = {}
+        self.outputs = {}
         self.params = {}
 
     def add_input(self, key, node, desc=""):
         self.inputs[key] = Input(key, node, desc=desc)
+
+    def add_named_output(self, name, path, desc=""):
+        self.outputs[name] = NamedOutput(name, path, desc)
 
     def manifest(self):
         """
@@ -119,17 +134,17 @@ class Transform(Cacheable):
         obj['image']   = self.image
         obj['inputs']  = {k: self.inputs[k].manifest() for k in self.inputs}
         obj['params']  = self.params
+        obj['outputs'] = self.outputs
         return obj
 
     def canonical(self):
-        """
-        returns the minimal amount of information for naming the object
-        completely and unambiguously. two transformations producing the same
-        canonical representation are considered equivalent.
+        """Returns the minimal amount of information for naming the object completely and unambiguously. If two different
+        Transforms produce the same canonical representation, they are considered equivalent, and it will be assumed that
+        they will produce results that are equivalent.
 
-        all parameters and inputs that have a deterministic influence
-        over the transformation's output should be covered in one form
-        or another in the canonical representation.
+        All parameters and inputs that have a deterministic influence over the transformation's output (files) should
+        therefore be covered in one form or another in the canonical representation. But, ideally, the canonical set of
+        parameters should be as small as possible.
         """
 
         obj = {

@@ -41,8 +41,42 @@ class Align(bunnies.Transform):
         self.add_input("ref", ref,  desc="reference fasta")
         self.add_input("ref_idx", ref_idx, desc="reference index")
 
+        self.add_named_output("bam", self.sample_name + ".bam")
+        self.add_named_output("bai", self.sample_name + ".bai")
+
         self.params["lossy"] = False
         self.params["sample_name"] = sample_name
+
+    @classmethod
+    def task_template(cls, compute_env):
+        scratchdisk = compute_env.get_disk('scratch')
+        if not scratchdisk:
+            raise Exception("Align tasks require a scrach disk")
+
+        return {
+            'jobtype': 'batch',
+            'image': cls.ALIGN_IMAGE
+        }
+
+    def resources(self, **kwargs):
+        # adjust resources based on inputs and job parameters
+        return {
+            'vcpu': 4,
+            'memory': 4000,
+            'timeout': -1
+        }
+
+
+    @classmethod
+    def run(cls, runtime, params, inputs, outputs, **kwargs):
+        """ this runs in the image """
+        workdir = params['workdir']
+        outputdir = params['outdir']
+        print("runtime: %s", runtime)
+        print("params: %s", params)
+        print("inputs: %s", inputs)
+        print("outputs: %s", outputs)
+        print("kwargs: %s", kwargs)
 
 
 class Merge(bunnies.Transform):
