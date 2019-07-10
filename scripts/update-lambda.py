@@ -36,7 +36,10 @@ PLATFORM_EXTRA = [
      "dst": os.path.join(PLATFORM_PKG, json_settings)}
     for json_settings in ("storage-settings.json",
                           "network-settings.json",
-                          "cluster-settings.json")
+                          "cluster-settings.json",
+                          "key-pair-settings.json",
+                          "environment-settings.json")
+
 ]
 
 
