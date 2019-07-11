@@ -36,6 +36,11 @@ class ExternalFile(Cacheable):
         return {"type": "blob",
                 "md5": hexdigest}
 
+    def __str__(self):
+        return "ExternalFile(%(url)s, info=%(info)s)" % {
+            "url": self.url,
+            "info": self.canonical()
+        }
 
 class S3Blob(Cacheable):
     __slots__ = ("url", "desc", "_manifest")
@@ -44,6 +49,12 @@ class S3Blob(Cacheable):
         self.url = url
         self.desc = desc
         self._manifest = None
+
+    def __str__(self):
+        return "S3(%(url)s, info=%(info)s)" % {
+            "url": self.url,
+            "info": "?" if not self._manifest else self._manifest
+        }
 
     def manifest(self):
         if not self._manifest:
@@ -55,12 +66,14 @@ class S3Blob(Cacheable):
             # FIXME let strategy pick appropriate name
             hexdigest = head_digests['md5']
             self._manifest = {"type": "blob",
-                              "md5": hexdigest}
+                              "md5": hexdigest,
+                              "len": meta['ContentLength']}
         return self._manifest
 
     def canonical(self):
-        # same as the manifest
+        # exclude length
         manifest = self.manifest()
+        return {k: manifest[k] for k in ("type", "md5")}
 
 class Input(Cacheable):
     """Inputs draw a named edge in the dependency graph.
@@ -110,6 +123,13 @@ class Transform(Cacheable):
         self.inputs = {}
         self.outputs = {}
         self.params = {}
+
+    def __str__(self):
+        return "Transform(%(name)s, %(version)s, %(params)s)" % {
+            "name": self.name,
+            "version": self.version,
+            "params": self.params
+        }
 
     def add_input(self, key, node, desc=""):
         self.inputs[key] = Input(key, node, desc=desc)

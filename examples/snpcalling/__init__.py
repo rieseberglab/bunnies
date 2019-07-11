@@ -91,11 +91,12 @@ class Merge(bunnies.Transform):
 
     __slots__ = ("sample_name",)
 
-    def __init__(self, sample_name, bams):
+    def __init__(self, sample_name, aligned_bams):
         super().__init__("merge", version=self.VERSION, image=self.MERGE_IMAGE)
         self.sample_name = sample_name
         self.params["sample_name"] = sample_name
-        if not bams:
+        if not aligned_bams:
             raise Exception("merging requires 1 or more inputs")
-        for i, bam in enumerate(bams):
+        for i, bam in enumerate(aligned_bams):
+            #print(self.sample_name, bam)
             self.add_input(i, bam, desc="aligned input #%d" % (i,))

@@ -3,7 +3,7 @@
   The utilities here take a pipeline specification and convert
   them into a list of tasks to execute.
 """
-from .graph import Cacheable, Transform
+from .graph import Cacheable, Transform, Input
 from .utils import canonical_hash
 
 
@@ -12,11 +12,12 @@ class PipelineException(Exception):
 
 
 class BuildNode(object):
+    """tree of build nodes"""
     __slots__ = ("data", "deps", "_uid")
 
     def __init__(self, data):
-        self.data = data
-        self.deps = []
+        self.data = data  # Cacheable
+        self.deps = []    # BuildNodes
         self._uid = None
 
     @property
@@ -32,6 +33,17 @@ class BuildNode(object):
 
         return self._uid
 
+    def postorder(self):
+        for dep in self.deps:
+            for node in dep.postorder():
+                yield node
+        yield self
+
+    def preorder(self):
+        yield self
+        for dep in self.deps:
+            for node in dep.preorder():
+                yield node
 
 class BuildGraph(object):
     """Traverse the pipeline graph and obtain a graph of data dependencies"""
@@ -53,6 +65,7 @@ class BuildGraph(object):
         if path is None:
             path = set()
 
+        # recurse in basic structures
         if isinstance(obj, list):
             return [self._dealias(o, path=path) for o in obj]
         if isinstance(obj, dict):
@@ -63,6 +76,8 @@ class BuildGraph(object):
         if not isinstance(obj, Cacheable):
             raise PipelineException("pipeline targets and their dependencies should be cacheable: %s" % (repr(obj)))
 
+        # dealias object based on its uid
+
         if obj in path:
             # produce ordered proof of cycle
             raise PipelineException("Cycle in dependency graph detected: %s", path)
@@ -72,7 +87,7 @@ class BuildGraph(object):
         # fixme modularity -- need a "getDeps" interface
         if isinstance(obj, Transform):
             # recurse
-            dealiased_deps = [self._dealias(obj.inputs[k], path=path) for k in obj.inputs]
+            dealiased_deps = [self._dealias(obj.inputs[k].node, path=path) for k in obj.inputs]
         else:
             dealiased_deps = []
 
@@ -96,6 +111,10 @@ class BuildGraph(object):
         all_targets = self.targets + self._dealias(targets)
         self.targets[:] = [x for x in set(all_targets)]
 
+    def dependency_order(self):
+        for target in self.targets:
+            for node in target.postorder():
+                yield node.data
 
 def build_target(roots):
     """

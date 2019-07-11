@@ -62,7 +62,9 @@ pipeline = bunnies.build_target(all_merged)
 # a URL where we can see details and progress in the browser
 # print(pipeline.dashboard_url())
 
-print(pipeline)
+for job in pipeline.dependency_order():
+    print(job)
+
 
 #compute_env = bunnies.ComputeEnv("merge-example")
 #compute_env.create()
