@@ -33,17 +33,14 @@ class BuildNode(object):
 
         return self._uid
 
-    def postorder(self):
-        for dep in self.deps:
-            for node in dep.postorder():
-                yield node
-        yield self
+    def postorder(self, visited=None):
+        if visited and self in visited:
+            return
 
-    def preorder(self):
-        yield self
         for dep in self.deps:
-            for node in dep.preorder():
+            for node in dep.postorder(visited=visited):
                 yield node
+        yield self
 
 class BuildGraph(object):
     """Traverse the pipeline graph and obtain a graph of data dependencies"""
@@ -112,9 +109,18 @@ class BuildGraph(object):
         self.targets[:] = [x for x in set(all_targets)]
 
     def dependency_order(self):
+        """generate the nodes of the graph in dependency order (if A depends on B, then B is yielded first).
+
+           Nodes of the graph are visited once only.
+        """
+        seen = set()
         for target in self.targets:
-            for node in target.postorder():
+            if target in seen:
+                continue
+            for node in target.postorder(visited=seen):
                 yield node.data
+            # postorder() adds node to seen
+
 
 def build_target(roots):
     """
