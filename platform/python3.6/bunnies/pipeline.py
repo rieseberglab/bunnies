@@ -3,7 +3,7 @@
   The utilities here take a pipeline specification and convert
   them into a list of tasks to execute.
 """
-from .graph import Cacheable, Transform, Input
+from .graph import Cacheable, Transform
 from .utils import canonical_hash
 
 
@@ -33,14 +33,27 @@ class BuildNode(object):
 
         return self._uid
 
-    def postorder(self, visited=None):
-        if visited and self in visited:
+    def postorder(self, prune_fn=lambda x: False):
+        """yield each node in DFS post order.
+           use prune_fn() to prune out this node and its depencies
+
+            - stop if prune_fn(self) == True
+            - recurse into dependencies, yielding in turn
+            - yield self
+        """
+        if prune_fn(self):
             return
 
         for dep in self.deps:
-            for node in dep.postorder(visited=visited):
+            for node in dep.postorder(prune_fn=prune_fn):
                 yield node
+
         yield self
+
+    def output_ready(self):
+        """determines if the buildnode's output is readily available for consumption by downstream analyses"""
+        cache_urls
+
 
 class BuildGraph(object):
     """Traverse the pipeline graph and obtain a graph of data dependencies"""
@@ -114,12 +127,43 @@ class BuildGraph(object):
            Nodes of the graph are visited once only.
         """
         seen = set()
+
+        def _prune_visited(node):
+            if node in seen:
+                return True
+            seen.add(node)
+            return False
+
         for target in self.targets:
             if target in seen:
                 continue
-            for node in target.postorder(visited=seen):
+            for node in target.postorder(prune_fn=_prune_visited):
                 yield node.data
-            # postorder() adds node to seen
+
+    def build_order(self):
+        """generate nodes in the graph that need to be built.
+           if A depends on B, B is yielded first
+
+           nodes that have already been built are skipped
+        """
+        seen = set()
+
+        def _already_built(node):
+            # visit only once
+            if node in seen:
+                return True
+            seen.add(node)
+
+            # prune if the result is already computed
+            if node.output_ready():
+                return True
+            return False
+
+        for target in self.targets:
+            if target in seen:
+                continue
+            for node in target.preorder(prune_fn=_already_built):
+                yield node
 
 
 def build_target(roots):

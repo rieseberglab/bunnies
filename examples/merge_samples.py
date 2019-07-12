@@ -62,7 +62,7 @@ pipeline = bunnies.build_target(all_merged)
 # a URL where we can see details and progress in the browser
 # print(pipeline.dashboard_url())
 
-for job in pipeline.dependency_order():
+for job in pipeline.build_order():
     print(job)
 
 

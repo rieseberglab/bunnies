@@ -5,6 +5,7 @@
 """
 from . import constants
 from . import utils
+from . import config
 
 
 class NotImpl(Exception):
@@ -19,6 +20,12 @@ class Cacheable(object):
         representation will be considered equivalent.
         """
         raise NotImpl("Cacheable.canonical")
+
+    def cache_urls(self):
+        """
+        returns locations where the object is/will be available if cached
+        """
+        raise NotImpl("Cacheable.cache_urls")
 
 
 class ExternalFile(Cacheable):
@@ -41,6 +48,11 @@ class ExternalFile(Cacheable):
             "url": self.url,
             "info": self.canonical()
         }
+
+    def cache_urls(self):
+        # FIXME lookup predicted data-import output location to determine where it is available
+        return [self.url]
+
 
 class S3Blob(Cacheable):
     __slots__ = ("url", "desc", "_manifest")
@@ -75,6 +87,10 @@ class S3Blob(Cacheable):
         manifest = self.manifest()
         return {k: manifest[k] for k in ("type", "md5")}
 
+    def cache_urls(self):
+        return [self.url]
+
+
 class Input(Cacheable):
     """Inputs draw a named edge in the dependency graph.
 
@@ -97,6 +113,10 @@ class Input(Cacheable):
             "desc": self.desc
         }
 
+    def cache_urls(self):
+        return self.node.cache_urls()
+
+
 class NamedOutput(object):
     """Specifies an output for a given transformation.  The output path provides a specification of how to retrieve the
        produced output resource from the results of a transformation.
@@ -107,6 +127,7 @@ class NamedOutput(object):
         self.name = name
         self.path = path
         self.desc = desc
+
 
 class Transform(Cacheable):
     """A transformation of inputs performed by a program,
@@ -159,12 +180,13 @@ class Transform(Cacheable):
 
     def canonical(self):
         """Returns the minimal amount of information for naming the object completely and unambiguously. If two different
-        Transforms produce the same canonical representation, they are considered equivalent, and it will be assumed that
-        they will produce results that are equivalent.
+        Transforms produce the same canonical representation, they are considered equivalent, and it will be assumed
+        that they will produce results that are equivalent.
 
         All parameters and inputs that have a deterministic influence over the transformation's output (files) should
         therefore be covered in one form or another in the canonical representation. But, ideally, the canonical set of
         parameters should be as small as possible.
+
         """
 
         obj = {
@@ -176,3 +198,15 @@ class Transform(Cacheable):
             'inputs': {k: self.inputs[k].canonical() for k in self.inputs}
         }
         return obj
+
+    def output_bucket(self):
+        return config['build_bucket']
+
+    def cache_urls(self):
+        """The default is to place the output into S3 prefixed by the canonical hash of the node"""
+        outbucket = self.output_bucket()
+        canonical_repr = self.canonical()
+        return ["s3://%(bucket)s/%(canon_repr)s/" % {
+            "bucket": outbucket,
+            "canon_repr": utils.canonical_hash(canonical_repr)
+        }]
