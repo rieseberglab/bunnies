@@ -6,12 +6,11 @@
 from . import constants
 from . import utils
 from . import config
-
-
-class NotImpl(Exception):
-    pass
+from .exc import NotImpl
 
 class Cacheable(object):
+    __slots__ = ()
+
     def canonical(self):
         """
         returns the strict minimum amount of information for naming the object
@@ -26,9 +25,21 @@ class Cacheable(object):
         """
         raise NotImpl("Cacheable.cache_urls")
 
+class Target(object):
+    __slots__ = ()
 
-class ExternalFile(Cacheable):
+    def exists(self):
+        """
+        returns True if the target is readily available. False if it
+        doesn't exist (yet).
+        """
+        raise NotImpl("Target.exists")
+
+class ExternalFile(Cacheable, Target):
     """An opaque handle to data with known digest(s)"""
+
+    kind = "ExternalFile"
+
     def __init__(self, url, desc=None, digests=None):
         self.url = url
         self.desc = desc
@@ -36,12 +47,32 @@ class ExternalFile(Cacheable):
         if not self.digests:
             raise Exception("at least one expected digest must be specified for external files")
 
+    @classmethod
+    def from_manifest(cls, doc):
+        ef = cls(doc['url'], doc['desc'], digests=None)
+        ef.digests = doc['digests']
+        return ef
+
+    def manifest(self):
+        return {
+            constants.MANIFEST_KIND_ATTR: self.kind, # fixme meta class?
+            'url': self.url,
+            'desc': self.desc,
+            'digests': self.digests
+        }
+
     def canonical(self):
-        # FIXME let strategy pick appropriate name
         hexdigest = self.digests['md5']
-        return {"type": "blob",
-                "class": self.__class__.__name__,
-                "md5": hexdigest}
+        assert hexdigest
+        return {
+            'type': "blob",
+            'md5': hexdigest
+        }
+
+    def exists(self):
+        """External files are assumed to exist before the pipeline starts
+        """
+        return True
 
     def __str__(self):
         return "ExternalFile(%(url)s, info=%(info)s)" % {
@@ -49,12 +80,10 @@ class ExternalFile(Cacheable):
             "info": self.canonical()
         }
 
-    def cache_urls(self):
-        # FIXME lookup predicted data-import output location to determine where it is available
-        return [self.url]
 
+class S3Blob(Cacheable, Target):
+    kind = "S3Blob"
 
-class S3Blob(Cacheable):
     __slots__ = ("url", "desc", "_manifest")
 
     def __init__(self, url, desc=None):
@@ -77,7 +106,8 @@ class S3Blob(Cacheable):
 
             # FIXME let strategy pick appropriate name
             hexdigest = head_digests['md5']
-            self._manifest = {"type": "blob",
+            self._manifest = {constants.MANIFEST_KIND_ATTR: self.kind,
+                              "type": "blob",
                               "md5": hexdigest,
                               "len": meta['ContentLength']}
         return self._manifest

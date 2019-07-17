@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- charset: utf-8; -*-
 
 """
 An example reprod pipeline which aligns and merges samples

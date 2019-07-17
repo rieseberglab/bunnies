@@ -12,3 +12,6 @@ class LambdaException(BunniesException):
 
 class UnmarshallException(BunniesException):
     pass
+
+class NotImpl(BunniesException):
+    pass

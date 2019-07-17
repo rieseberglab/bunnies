@@ -21,3 +21,8 @@ CE_ECS_INSTANCE_ROLE = "bunnies-ecs-instance-role"
 CE_SPOT_ROLE = "bunnies-ec2-spot-fleet-role"
 CE_BATCH_SERVICE_ROLE = "bunnies-batch-service-role"
 CE_INSTANCE_PROFILE = "bunnies-batch-instance-profile"
+
+
+# reserved attribute name in json manifest dictionary
+# to represent the "kind" of graph object serialized
+MANIFEST_KIND_ATTR = "_kind"
