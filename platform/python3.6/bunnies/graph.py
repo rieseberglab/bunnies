@@ -11,7 +11,6 @@ from . import config
 class NotImpl(Exception):
     pass
 
-
 class Cacheable(object):
     def canonical(self):
         """
@@ -41,6 +40,7 @@ class ExternalFile(Cacheable):
         # FIXME let strategy pick appropriate name
         hexdigest = self.digests['md5']
         return {"type": "blob",
+                "class": self.__class__.__name__,
                 "md5": hexdigest}
 
     def __str__(self):

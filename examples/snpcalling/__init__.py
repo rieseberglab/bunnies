@@ -41,9 +41,6 @@ class Align(bunnies.Transform):
         self.add_input("ref", ref,  desc="reference fasta")
         self.add_input("ref_idx", ref_idx, desc="reference index")
 
-        self.add_named_output("bam", self.sample_name + ".bam")
-        self.add_named_output("bai", self.sample_name + ".bai")
-
         self.params["lossy"] = False
         self.params["sample_name"] = sample_name
 
@@ -66,12 +63,17 @@ class Align(bunnies.Transform):
             'timeout': -1
         }
 
-
+    
     @classmethod
     def run(cls, runtime, params, inputs, outputs, **kwargs):
         """ this runs in the image """
         workdir = params['workdir']
         outputdir = params['outdir']
+
+        self.add_named_output("bam", self.sample_name + ".bam")
+        self.add_named_output("bai", self.sample_name + ".bai")
+
+
         print("runtime: %s", runtime)
         print("params: %s", params)
         print("inputs: %s", inputs)
