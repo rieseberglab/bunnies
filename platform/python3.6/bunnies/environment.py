@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-
-
 """
   Tools for managing a bunnies compute environment
 """
+
 from uuid import uuid4
 import logging
 import os.path

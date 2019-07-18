@@ -4,7 +4,6 @@ from .config import config
 
 log = logging.getLogger(__package__)
 
-
 def ecs_describe_tasks(tasks):
     ecs = boto3.client('ecs')
     cluster = config['cluster_arn']
