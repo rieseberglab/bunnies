@@ -26,3 +26,18 @@ CE_INSTANCE_PROFILE = "bunnies-batch-instance-profile"
 # reserved attribute name in json manifest dictionary
 # to represent the "kind" of graph object serialized
 MANIFEST_KIND_ATTR = "_kind"
+
+#
+# result file -- if this file exists, the transform has completed successfully
+# and _all_ of its outputs have been successfully saved)
+#
+# {
+#   'manifest': {...}
+#   'output': {
+#        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
+#   },
+#   'log': ["url to raw log file"]
+#   'usage': "url to resource usage statistics file"
+# }
+#
+TRANSFORM_RESULT_FILE = "transform-result.json"

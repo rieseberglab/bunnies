@@ -68,7 +68,7 @@ def s3_split_url(objecturl):
 
 
 def get_blob_meta(objecturl, logprefix=""):
-    """fetches metadata about the given object"""
+    """fetches metadata about the given object. if the object doesn't exist. raise NoSuchFile"""
     bucketname, keyname = s3_split_url(objecturl)
     logprefix = logprefix + " " if logprefix else logprefix
     logger.info("%sfetching meta for URL: %s", logprefix, objecturl)
@@ -84,15 +84,62 @@ def get_blob_meta(objecturl, logprefix=""):
     return head_res
 
 
-def canonical_hash(canon_obj, algo='sha1'):
+class StreamingBodyCxt(object):
+    __slots__ = ("res", "body")
+
+    def __init__(self, res):
+        self.res = res
+        self.body = res['Body']
+
+    def __enter__(self):
+        return self.body, self.res
+
+    def __exit_(self, typ, value, traceback):
+        self.body.close()
+
+
+def get_blob_ctx(objecturl, logprefix=""):
+    """returns (body, info) for a given blob url.
+       It takes care of closing the connection automatically.
+
+    >>> with get_blob_ctx("s3://foo/bar") as (body, info):
+    ...    data = body.read()
+
     """
-    hash a canonical dictionary representation into a hexdigest
+    bucketname, keyname = s3_split_url(objecturl)
+    logprefix = logprefix + " " if logprefix else logprefix
+    logger.info("%sfetching URL: %s", logprefix, objecturl)
+    s3 = boto3.client('s3')
+    try:
+        res = s3.get_object(Bucket=bucketname, Key=keyname)
+    except ClientError as clierr:
+        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
+                     exc_info=clierr)
+        if clierr.response['Error']['Code'] == '404':
+            raise NoSuchFile(objecturl)
+        raise
+    return StreamingBodyCtx(res)
+
+
+def canonical_hash(canon_obj, algo='sha1'):
+    """hash a canonical dictionary representation into a hexdigest.
+
+    contained objects must be JSONSerializable, and strings must be unicode, otherwise a TypeError is raised.
     """
     serialized = json.dumps(canon_obj, sort_keys=True, separators=(",",  ":")).encode('utf-8')
     digest_obj = getattr(hashlib, algo)()
     digest_obj.update(serialized)
     return "%s_%s" % (algo, digest_obj.hexdigest())
 
+def load_json(obj):
+    if isinstance(obj, str):
+        return json.loads(obj)
+    elif isinstance(obj, bytes):
+        return json.loads(obj.decode('utf-8'))
+    elif hasattr(obj, "read"):
+        return json.load(data)
+    else:
+        raise TypeError("cannot load json from this object")
 
 def parse_digests(digests):
     """

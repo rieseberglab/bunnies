@@ -20,9 +20,9 @@ class Align(bunnies.Transform):
     ALIGN_IMAGE = "rieseberglab:5-2.3.0"
     VERSION = "1"
 
-    TASK_NAME = "align-task"
-
     __slots__ = ("sample_name", "r1", "r2", "ref", "ref_index")
+
+    kind = "snpcalling.Align"
 
     def __init__(self, sample_name=None, r1=None, r2=None, ref=None, ref_idx=None):
         super().__init__("align", version=self.VERSION, image=self.ALIGN_IMAGE)
@@ -55,7 +55,7 @@ class Align(bunnies.Transform):
             'image': cls.ALIGN_IMAGE
         }
 
-    def resources(self, **kwargs):
+    def task_resources(self, **kwargs):
         # adjust resources based on inputs and job parameters
         return {
             'vcpu': 4,
@@ -63,9 +63,8 @@ class Align(bunnies.Transform):
             'timeout': -1
         }
 
-    
     @classmethod
-    def run(cls, runtime, params, inputs, outputs, **kwargs):
+    def run(self):
         """ this runs in the image """
         workdir = params['workdir']
         outputdir = params['outdir']
@@ -89,9 +88,8 @@ class Merge(bunnies.Transform):
     MERGE_IMAGE = "rieseberglab/analytics:5-2.3.2"
     VERSION = "1"
 
-    TASK_NAME = "merge-task"
-
     __slots__ = ("sample_name",)
+    kind = "snpcalling.Merge"
 
     def __init__(self, sample_name, aligned_bams):
         super().__init__("merge", version=self.VERSION, image=self.MERGE_IMAGE)

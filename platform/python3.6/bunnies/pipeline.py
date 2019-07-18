@@ -3,8 +3,9 @@
   The utilities here take a pipeline specification and convert
   them into a list of tasks to execute.
 """
-from .graph import Cacheable, Transform
+from .graph import Cacheable, Transform, Target
 from .utils import canonical_hash
+import json
 
 
 class PipelineException(Exception):
@@ -12,7 +13,7 @@ class PipelineException(Exception):
 
 
 class BuildNode(object):
-    """tree of build nodes"""
+    """graph of buildable things with dependencies"""
     __slots__ = ("data", "deps", "_uid")
 
     def __init__(self, data):
@@ -22,14 +23,11 @@ class BuildNode(object):
 
     @property
     def uid(self):
-        if self._uid:
-            return self._uid
-        if isinstance(self.data, Cacheable):
-            canon = self.data.canonical()
-            str_canon = canonical_hash(canon)
-            self._uid = str_canon
-        else:
-            self._uid = self.data.__hash__()
+        if not self._uid:
+            if isinstance(self.data, Cacheable):
+                self._uid = self.data.canonical_id
+            else:
+                self._uid = id(self.data)
 
         return self._uid
 
@@ -52,7 +50,37 @@ class BuildNode(object):
 
     def output_ready(self):
         """determines if the buildnode's output is readily available for consumption by downstream analyses"""
-        cache_urls
+        if not isinstance(self.node, Target):
+            raise TypeError("only valid on Targets")
+        return self.node.exists()
+
+    def execution_transfer_script(self):
+        """
+        Create a self-standing script that executes just the one node
+        """
+
+        # fixme -- inefficient pickle.
+        #          - slow
+        #          - nodes will need to be dealiased again.
+        #
+        manifest_s = repr(json.dumps(self.node.manifest()))
+        return """#!/usr/bin/env python3
+import bunnies.runtime
+import from bunnies.unmarshall import unmarshall
+
+## FIXME - START USER HOOK
+import snpcalling
+## FIXME - END USER HOOK
+manifest = %(manifest_s)s
+transform = unmarshall(manifest)
+output = transform.run()
+# fixme upload files encountered
+""" % {
+    'manifest_s': manifest_s
+    
+}
+
+
 
 
 class BuildGraph(object):

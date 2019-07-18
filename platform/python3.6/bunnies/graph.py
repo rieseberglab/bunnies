@@ -6,39 +6,54 @@
 from . import constants
 from . import utils
 from . import config
-from .exc import NotImpl
+from .exc import NotImpl, NoSuchFile
 
 class Cacheable(object):
+    """a cacheable resource, canonically named according to its contents or provenance"""
     __slots__ = ()
 
     def canonical(self):
         """
-        returns the strict minimum amount of information for naming the object
+        returns the strict minimum amount of information for naming the resource
         completely and unambiguously. two objects with the same canonical
         representation will be considered equivalent.
         """
         raise NotImpl("Cacheable.canonical")
 
-    def cache_urls(self):
+    @property
+    def canonical_id(self):
         """
-        returns locations where the object is/will be available if cached
+        retrieve an id string that can be used as a key to unambiguously identify this
+        resource in a cache
+
+        implementations might want to cache the result of the computation
         """
-        raise NotImpl("Cacheable.cache_urls")
+        canon_doc = self.canonical()
+        return utils.canonical_hash(canon_doc)
 
 class Target(object):
+    """target is a collection of one or more resources that can be generated and retrieved"""
     __slots__ = ()
 
     def exists(self):
         """
-        returns True if the target is readily available. False if it
+        returns a URL if the target contents are readily available. None if it
         doesn't exist (yet).
         """
         raise NotImpl("Target.exists")
 
+    def ls(self):
+        """returns a "directory" (in the general sense) describing the target's contents, in the form of a {k:v} dictionary.
+
+        targets are allowed to contain multiple sub-items. the directory is what a user of the Target would consult to
+        pick a particular item or datum of interest.
+        """
+        raise NotImpl("Target.ls")
+
 class ExternalFile(Cacheable, Target):
     """An opaque handle to data with known digest(s)"""
 
-    kind = "ExternalFile"
+    kind = "bunnies.ExternalFile"
 
     def __init__(self, url, desc=None, digests=None):
         self.url = url
@@ -69,20 +84,25 @@ class ExternalFile(Cacheable, Target):
             'md5': hexdigest
         }
 
-    def exists(self):
-        """External files are assumed to exist before the pipeline starts
-        """
-        return True
-
     def __str__(self):
         return "ExternalFile(%(url)s, info=%(info)s)" % {
             "url": self.url,
             "info": self.canonical()
         }
 
+    def exists(self):
+        """External files are assumed to exist before the pipeline starts
+        """
+        return True
+
+    def ls(self):
+        return {
+            'url': self.url,
+            'digests': self.digests
+        }
 
 class S3Blob(Cacheable, Target):
-    kind = "S3Blob"
+    kind = "bunnies.S3Blob"
 
     __slots__ = ("url", "desc", "_manifest")
 
@@ -106,74 +126,94 @@ class S3Blob(Cacheable, Target):
 
             # FIXME let strategy pick appropriate name
             hexdigest = head_digests['md5']
-            self._manifest = {constants.MANIFEST_KIND_ATTR: self.kind,
-                              "type": "blob",
+            self._manifest = {constants.MANIFEST_KIND_ATTR: self.kind, # fixme meta class?
+                              "desc": self.desc,
+                              "url": self.url,
                               "md5": hexdigest,
                               "len": meta['ContentLength']}
         return self._manifest
 
+    @classmethod
+    def from_manifest(cls, doc):
+        obj = cls(doc["url"], desc=doc.get('desc'))
+        # no need to do HEAD again.
+        obj._manifest = doc
+        return obj
+
     def canonical(self):
-        # exclude length
         manifest = self.manifest()
-        return {k: manifest[k] for k in ("type", "md5")}
+        # exclude length
+        return {
+            'type': 'blob',
+            'md5': manifest['md5']
+        }
 
-    def cache_urls(self):
-        return [self.url]
+    def exists(self):
+        """External files are assumed to exist before the pipeline starts"""
+        self.manifest() # for the side effects
+        return self.url
 
+    def ls(self):
+        return self.manifest()
 
 class Input(Cacheable):
-    """Inputs draw a named edge in the dependency graph.
+    """Input attaches a name and description to an edge in the dependency graph.
 
-       The description is a merely a hint to describe why the
-       dependency exists.
+       The description should explain why the dependency exists.
     """
     __slots__ = ("name", "node", "desc")
+
+    kind = "bunnies.Input"
+
     def __init__(self, name, node, desc=""):
         self.name = name
         self.node = node
         self.desc = desc
 
     def canonical(self):
+        # no extra information is added. give this the same id as the
+        # node it is referencing.
         return self.node.canonical()
 
     def manifest(self):
         return {
+            constants.MANIFEST_KIND_ATTR: self.kind, # fixme meta class?
             "name": self.name,
-            "node": self.node,
+            "node": self.node.manifest(),
             "desc": self.desc
         }
 
-    def cache_urls(self):
-        return self.node.cache_urls()
+    @classmethod
+    def from_manifest(cls, doc):
+        return cls(doc['name'], doc['node'], desc=doc.get('desc', ""))
 
 
-class NamedOutput(object):
-    """Specifies an output for a given transformation.  The output path provides a specification of how to retrieve the
-       produced output resource from the results of a transformation.
+class Transform(Target, Cacheable):
     """
-    __slots__ = ('name', 'path', 'desc')
-
-    def __init__(self, name, path, desc=""):
-        self.name = name
-        self.path = path
-        self.desc = desc
-
-
-class Transform(Cacheable):
-    """A transformation of inputs performed by a program,
-       with the given parameters
+    A transformation of inputs performed by a program, with the given parameters
     """
+    __slots__ = ("name", "desc", "version", "image", "inputs", "params", "_canonical_id")
 
-    __slots__ = ("name", "desc", "version", "image", "inputs", "params")
+    kind = "bunnies.Transform"
 
-    def __init__(self, name, version=None, image=None, desc=""):
+    def __init__(self, name=None, version=None, image=None, desc="", **kwargs):
+
+        if not name:
+            raise ValueError("all Transforms must have a name")
+
+        if not version:
+            raise ValueError("all Transforms must identify a version for their implementation")
+
+        # image is optional
+
         self.name = name
         self.desc = desc
         self.version = version
         self.image = image
-        self.inputs = {}
+
         self.outputs = {}
-        self.params = {}
+        self.inputs = kwargs.get('inputs', {})
+        self.params = kwargs.get('params', {})
 
     def __str__(self):
         return "Transform(%(name)s, %(version)s, %(params)s)" % {
@@ -183,21 +223,12 @@ class Transform(Cacheable):
         }
 
     def add_input(self, key, node, desc=""):
+        # FIXME lock down the inputs if the canonical representation has been retrieved
         self.inputs[key] = Input(key, node, desc=desc)
 
-    def add_named_output(self, name, path, desc=""):
-        self.outputs[name] = NamedOutput(name, path, desc)
-
     def manifest(self):
-        """
-        the manifest is a dictionary document that contains a full
-        description of the data transformation. it describes the
-        operation, the inputs for the operation, and its parameters.
-
-        it can contain redundant information, and information that is
-        supplementary to the transformation.
-        """
         obj = {}
+        obj[constants.MANIFEST_KIND_ATTR] = self.kind, # fixme meta class?
         obj['type']    = "transform"
         obj['name']    = self.name
         obj['desc']    = self.desc
@@ -207,6 +238,10 @@ class Transform(Cacheable):
         obj['params']  = self.params
         obj['outputs'] = self.outputs
         return obj
+
+    @classmethod
+    def from_manifest(cls, doc):
+        return cls(**doc)
 
     def canonical(self):
         """Returns the minimal amount of information for naming the object completely and unambiguously. If two different
@@ -218,25 +253,53 @@ class Transform(Cacheable):
         parameters should be as small as possible.
 
         """
-
         obj = {
             'type': "transform",
-            'name': self.name,
-            'version': self.version,
+            'name': self.name, 'version': self.version,
             'image': self.image,
             'params': self.params,
             'inputs': {k: self.inputs[k].canonical() for k in self.inputs}
         }
         return obj
 
-    def output_bucket(self):
-        return config['build_bucket']
+    @property
+    def canonical_id(self):
+        if not self._canonical_id:
+            self._canonical_id = super(Transform, self).canonical_id
+        return self._canonical_id
 
-    def cache_urls(self):
-        """The default is to place the output into S3 prefixed by the canonical hash of the node"""
-        outbucket = self.output_bucket()
-        canonical_repr = self.canonical()
-        return ["s3://%(bucket)s/%(canon_repr)s/" % {
-            "bucket": outbucket,
-            "canon_repr": utils.canonical_hash(canonical_repr)
-        }]
+    def output_prefix(self):
+        build_bucket = config['storage']['build_bucket']
+        return "s3://%(bucket)s/%(cid)s/" % {
+            'bucket': build_bucket,
+            'cid': self.canonical_id
+        }
+
+    def exists(self):
+        """
+        check if the results of the transformation exist
+        """
+        buckets = [config['storage']['build_bucket']]
+        canonical_id = self.canonical_id
+        for bucket in buckets:
+            try:
+                candidate = "s3://%(bucket)s/%(cid)s/%(result)s" % {
+                    'bucket': bucket,
+                    'cid': canonical_id,
+                    'result': constants.TRANSFORM_RESULT_FILE
+                }
+                meta = utils.get_blob_meta(candidate, logprefix=self.kind)
+                return candidate
+            except NoSuchFile:
+                pass
+        return None
+
+    def ls(self):
+        transform_result = self.exists()
+        if not transform_result:
+            raise NoSuchFile("target is not available")
+
+        with utils.get_blob_ctx(transform_result, logprefix=self.kind) as (body, info):
+            doc = utils.load_json(body)
+
+        return doc['output']
