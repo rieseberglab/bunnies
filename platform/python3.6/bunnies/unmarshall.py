@@ -29,13 +29,14 @@ def register_kind(pickled_class, unmarshaller=None):
         raise ValueError("cannot extract kind from obj: %s", obj)
 
     def _get_parser(obj):
-        if callable(obj):
-            return obj
+        # FIXME check if type
         try:
             return getattr(obj, "from_manifest")
         except AttributeError:
             pass
 
+        if callable(obj):
+            return obj
         raise ValueError("expected a callable or a from_manifest method: %s", obj)
 
     kind = _get_kind(pickled_class)
@@ -77,12 +78,14 @@ def _unmarshall(obj, path):
         try:
             # custom object unmarshall
             return unwrap(with_converted_deps) if callable(unwrap) else with_converted_deps
-        except exc.UnmarshalledException:
-            raise
         except Exception as _exc:
             logger.error("error at document path %s (kind=%s): %s", _pathstr(), kind, _exc, exc_info=True)
+            logger.error("function was %s,  args were: %s", unwrap, with_converted_deps)
             msg = "error at document path %s (kind=%s): %s" % (_pathstr(), kind, str(_exc))
             raise exc.UnmarshallException(msg)
+    else:
+        # string, int, other object, etc.
+        return obj
 
 
 def unmarshall(obj):
