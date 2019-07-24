@@ -18,28 +18,28 @@ ha412_idx = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-201811
 
 a1 = Align(
     sample_name="ANN0830",
-    r1=InputFile("https://github.com/rieseberglab/fastq-examples/blob/master/data/HI.4038.002.index_10.ANN0830_R1.fastq.gz",
-                 digests=("d41d8cd98f00b204e9800998ecf8427e",)),
-    r2=InputFile("https://github.com/rieseberglab/fastq-examples/blob/master/data/HI.4038.002.index_10.ANN0830_R2.fastq.gz",
-                 digests=("d41d8cd98f00b204e9800998ecf8427e",)),
+    r1=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4038.002.index_10.ANN0830_R1.fastq.gz",
+                 digests=("cfdbedf549fd23685321d7b27fccfb10",)),
+    r2=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4038.002.index_10.ANN0830_R2.fastq.gz",
+                 digests=("397c364cbad6cb16377f5572b89ec5c5",)),
     ref=ha412,
     ref_idx=ha412_idx)
 
 a2 = Align(
     sample_name="ANN0830",
-    r1=InputFile("https://github.com/rieseberglab/fastq-examples/blob/master/data/HI.4549.004.index_10.ANN0830_R1.fastq.gz?raw=true",
-                 digests=("d41d8cd98f00b204e9800998ecf8427e",)),
-    r2=InputFile("https://github.com/rieseberglab/fastq-examples/blob/master/data/HI.4549.004.index_10.ANN0830_R2.fastq.gz?raw=true",
-                 digests=("d41d8cd98f00b204e9800998ecf8427e",)),
+    r1=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4549.004.index_10.ANN0830_R1.fastq.gz",
+                 digests=("f646412d9568e0c7f1822b951ccc2e6e",)),
+    r2=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4549.004.index_10.ANN0830_R2.fastq.gz",
+                 digests=("73ea5780ff055c35d1ac939e73c47580",)),
     ref=ha412,
     ref_idx=ha412_idx)
 
 a3 = Align(
     sample_name="ANN0832",
-    r1=InputFile("https://github.com/rieseberglab/fastq-examples/blob/master/data/HI.4019.002.index_8.ANN0832_R1.fastq.gz?raw=true",
-                 digests=("d41d8cd98f00b204e9800998ecf8427e",)),
-    r2=InputFile("https://github.com/rieseberglab/fastq-examples/blob/master/data/HI.4019.002.index_8.ANN0832_R2.fastq.gz?raw=true",
-                 digests=("d41d8cd98f00b204e9800998ecf8427e",)),
+    r1=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4019.002.index_8.ANN0832_R1.fastq.gz",
+                 digests=("d841ccf568e94aec99418f232db4535a",)),
+    r2=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4019.002.index_8.ANN0832_R2.fastq.gz",
+                 digests=("41720b0a79e20dd81c8865d9404cd550",)),
     ref=ha412,
     ref_idx=ha412_idx)
 
