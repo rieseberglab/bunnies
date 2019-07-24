@@ -20,7 +20,7 @@ class Align(bunnies.Transform):
     ALIGN_IMAGE = "rieseberglab:5-2.3.0"
     VERSION = "1"
 
-    __slots__ = ("sample_name", "r1", "r2", "ref", "ref_index")
+    __slots__ = ("sample_name", "r1", "r2", "ref", "ref_idx")
 
     kind = "snpcalling.Align"
 

@@ -211,9 +211,10 @@ class Transform(Target, Cacheable):
         self.version = version
         self.image = image
 
-        self.outputs = {}
         self.inputs = kwargs.get('inputs', {})
         self.params = kwargs.get('params', {})
+
+        self._canonical_id = None
 
     def __str__(self):
         return "Transform(%(name)s, %(version)s, %(params)s)" % {
@@ -236,7 +237,6 @@ class Transform(Target, Cacheable):
         obj['image']   = self.image
         obj['inputs']  = {k: self.inputs[k].manifest() for k in self.inputs}
         obj['params']  = self.params
-        obj['outputs'] = self.outputs
         return obj
 
     @classmethod
@@ -269,7 +269,7 @@ class Transform(Target, Cacheable):
         return self._canonical_id
 
     def output_prefix(self):
-        build_bucket = config['storage']['build_bucket']
+        build_bucket = config['build_bucket']
         return "s3://%(bucket)s/%(cid)s/" % {
             'bucket': build_bucket,
             'cid': self.canonical_id
@@ -279,7 +279,7 @@ class Transform(Target, Cacheable):
         """
         check if the results of the transformation exist
         """
-        buckets = [config['storage']['build_bucket']]
+        buckets = [config['build_bucket']]
         canonical_id = self.canonical_id
         for bucket in buckets:
             try:

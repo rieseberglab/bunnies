@@ -26,6 +26,8 @@ class BuildNode(object):
         if not self._uid:
             if isinstance(self.data, Cacheable):
                 self._uid = self.data.canonical_id
+                if not isinstance(self._uid, str):
+                    raise ValueError("Node %s computes a non string canonical id: %s", self.data, self._uid)
             else:
                 self._uid = id(self.data)
 
@@ -50,38 +52,56 @@ class BuildNode(object):
 
     def output_ready(self):
         """determines if the buildnode's output is readily available for consumption by downstream analyses"""
-        if not isinstance(self.node, Target):
+        if not isinstance(self.data, Target):
             raise TypeError("only valid on Targets")
-        return self.node.exists()
+        return self.data.exists()
 
     def execution_transfer_script(self):
         """
         Create a self-standing script that executes just the one node
         """
 
-        # fixme -- inefficient pickle.
+        # fixme -- json is an inefficient pickle.
         #          - slow
         #          - nodes will need to be dealiased again.
         #
-        manifest_s = repr(json.dumps(self.node.manifest()))
+        manifest_s = repr(json.dumps(self.data.manifest()))
+        canonical_s = repr(json.dumps(self.data.canonical()))
+
         return """#!/usr/bin/env python3
 import bunnies.runtime
 import from bunnies.unmarshall import unmarshall
+import json
 
 ## FIXME - START USER HOOK
 import snpcalling
 ## FIXME - END USER HOOK
-manifest = %(manifest_s)s
+
+uid_s       = %(uid_s)s
+canonical_s = %(canonical_s)s
+manifest_s  = %(manifest_s)s
+
+manifest_obj = json.loads(manifest_s)
 transform = unmarshall(manifest)
-output = transform.run()
+
+outputs = transform.run()
+
+bunnies.runtime.write_result(outputs {
+#   'manifest': {...}
+#   'output': {
+#        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
+#   },
+#   'log': ["url to raw log file"]
+#   'usage': "url to resource usage statistics file"
+# }
+#)
+
 # fixme upload files encountered
 """ % {
-    'manifest_s': manifest_s
-    
+    'manifest_s': manifest_s,
+    'canonical_s': canonical_s,
+    'uid_s': repr(self.uid)
 }
-
-
-
 
 class BuildGraph(object):
     """Traverse the pipeline graph and obtain a graph of data dependencies"""
@@ -185,12 +205,13 @@ class BuildGraph(object):
             # prune if the result is already computed
             if node.output_ready():
                 return True
+
             return False
 
         for target in self.targets:
             if target in seen:
                 continue
-            for node in target.preorder(prune_fn=_already_built):
+            for node in target.postorder(prune_fn=_already_built):
                 yield node
 
 
