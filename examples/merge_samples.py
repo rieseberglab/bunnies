@@ -64,7 +64,8 @@ pipeline = bunnies.build_target(all_merged)
 # print(pipeline.dashboard_url())
 
 for job in pipeline.build_order():
-    print(job)
+    print("build %s" % job.data)
+    print("transfer_script %s" % job.execution_transfer_script())
 
 
 #compute_env = bunnies.ComputeEnv("merge-example")

@@ -71,15 +71,16 @@ def get_blob_meta(objecturl, logprefix=""):
     """fetches metadata about the given object. if the object doesn't exist. raise NoSuchFile"""
     bucketname, keyname = s3_split_url(objecturl)
     logprefix = logprefix + " " if logprefix else logprefix
-    logger.info("%sfetching meta for URL: %s", logprefix, objecturl)
+    logger.debug("%sfetching meta for URL: %s", logprefix, objecturl)
     s3 = boto3.client('s3')
     try:
         head_res = s3.head_object(Bucket=bucketname, Key=keyname)
     except ClientError as clierr:
-        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
-                     exc_info=clierr)
         if clierr.response['Error']['Code'] == '404':
             raise NoSuchFile(objecturl)
+
+        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
+                     exc_info=clierr)
         raise
     return head_res
 
