@@ -78,7 +78,6 @@ def get_blob_meta(objecturl, logprefix=""):
     except ClientError as clierr:
         if clierr.response['Error']['Code'] == '404':
             raise NoSuchFile(objecturl)
-
         logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
                      exc_info=clierr)
         raise
@@ -114,10 +113,10 @@ def get_blob_ctx(objecturl, logprefix=""):
     try:
         res = s3.get_object(Bucket=bucketname, Key=keyname)
     except ClientError as clierr:
-        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
-                     exc_info=clierr)
         if clierr.response['Error']['Code'] == '404':
             raise NoSuchFile(objecturl)
+        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
+            exc_info=clierr)
         raise
     return StreamingBodyCtx(res)
 
