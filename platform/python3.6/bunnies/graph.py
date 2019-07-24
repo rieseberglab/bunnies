@@ -7,6 +7,7 @@ from . import constants
 from . import utils
 from . import config
 from .exc import NotImpl, NoSuchFile
+from . import unmarshall
 
 class Cacheable(object):
     """a cacheable resource, canonically named according to its contents or provenance"""
@@ -50,6 +51,7 @@ class Target(object):
         """
         raise NotImpl("Target.ls")
 
+
 class ExternalFile(Cacheable, Target):
     """An opaque handle to data with known digest(s)"""
 
@@ -64,8 +66,9 @@ class ExternalFile(Cacheable, Target):
 
     @classmethod
     def from_manifest(cls, doc):
-        ef = cls(doc['url'], doc['desc'], digests=None)
-        ef.digests = doc['digests']
+        print(doc['digests'])
+        digests = [ "%s:%v" % (k,v) for k,v in doc['digests'].items() ]
+        ef = cls(doc['url'], doc['desc'], digests=digests)
         return ef
 
     def manifest(self):
@@ -100,6 +103,9 @@ class ExternalFile(Cacheable, Target):
             'url': self.url,
             'digests': self.digests
         }
+
+unmarshall.register_kind(ExternalFile)
+
 
 class S3Blob(Cacheable, Target):
     kind = "bunnies.S3Blob"
@@ -156,6 +162,9 @@ class S3Blob(Cacheable, Target):
     def ls(self):
         return self.manifest()
 
+unmarshall.register_kind(S3Blob)
+
+
 class Input(Cacheable):
     """Input attaches a name and description to an edge in the dependency graph.
 
@@ -187,6 +196,7 @@ class Input(Cacheable):
     def from_manifest(cls, doc):
         return cls(doc['name'], doc['node'], desc=doc.get('desc', ""))
 
+unmarshall.register_kind(Input)
 
 class Transform(Target, Cacheable):
     """
@@ -229,7 +239,7 @@ class Transform(Target, Cacheable):
 
     def manifest(self):
         obj = {}
-        obj[constants.MANIFEST_KIND_ATTR] = self.kind, # fixme meta class?
+        obj[constants.MANIFEST_KIND_ATTR] = self.kind # fixme meta class?
         obj['type']    = "transform"
         obj['name']    = self.name
         obj['desc']    = self.desc
@@ -269,7 +279,7 @@ class Transform(Target, Cacheable):
         return self._canonical_id
 
     def output_prefix(self):
-        build_bucket = config['build_bucket']
+        build_bucket = config['storage']['build_bucket']
         return "s3://%(bucket)s/%(cid)s/" % {
             'bucket': build_bucket,
             'cid': self.canonical_id
@@ -279,7 +289,7 @@ class Transform(Target, Cacheable):
         """
         check if the results of the transformation exist
         """
-        buckets = [config['build_bucket']]
+        buckets = [config['storage']['build_bucket']]
         canonical_id = self.canonical_id
         for bucket in buckets:
             try:
@@ -303,3 +313,6 @@ class Transform(Target, Cacheable):
             doc = utils.load_json(body)
 
         return doc['output']
+
+unmarshall.register_kind(Transform)
+

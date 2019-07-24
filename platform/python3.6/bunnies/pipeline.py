@@ -5,6 +5,8 @@
 """
 from .graph import Cacheable, Transform, Target
 from .utils import canonical_hash
+from . import runtime
+
 import json
 
 
@@ -14,12 +16,13 @@ class PipelineException(Exception):
 
 class BuildNode(object):
     """graph of buildable things with dependencies"""
-    __slots__ = ("data", "deps", "_uid")
+    __slots__ = ("data", "deps", "_uid", "_output_ready")
 
     def __init__(self, data):
         self.data = data  # Cacheable
         self.deps = []    # BuildNodes
         self._uid = None
+        self._output_ready = None
 
     @property
     def uid(self):
@@ -50,11 +53,14 @@ class BuildNode(object):
 
         yield self
 
+    @property
     def output_ready(self):
         """determines if the buildnode's output is readily available for consumption by downstream analyses"""
-        if not isinstance(self.data, Target):
-            raise TypeError("only valid on Targets")
-        return self.data.exists()
+        if self._output_ready is None:
+            if not isinstance(self.data, Target):
+                raise TypeError("only valid on Targets")
+            self._output_ready = self.data.exists()
+        return self._output_ready
 
     def execution_transfer_script(self):
         """
@@ -68,40 +74,46 @@ class BuildNode(object):
         manifest_s = repr(json.dumps(self.data.manifest()))
         canonical_s = repr(json.dumps(self.data.canonical()))
 
+        hooks = "\n".join(runtime.add_user_hook._hooks)
+
         return """#!/usr/bin/env python3
 import bunnies.runtime
-import from bunnies.unmarshall import unmarshall
+import bunnies.constants as C
+from bunnies.unmarshall import unmarshall
+import os.path
 import json
+import logging
+log = logging.getLogger()
 
-## FIXME - START USER HOOK
-import snpcalling
-## FIXME - END USER HOOK
+# USER HOOKS START
+%(hooks)s
+# USER HOOKS END
 
 uid_s       = %(uid_s)s
+
 canonical_s = %(canonical_s)s
+
 manifest_s  = %(manifest_s)s
 
 manifest_obj = json.loads(manifest_s)
-transform = unmarshall(manifest)
+canonical_obj = json.loads(canonical_s)
 
-outputs = transform.run()
+bunnies.setup_logging()
 
-bunnies.runtime.write_result(outputs {
-#   'manifest': {...}
-#   'output': {
-#        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
-#   },
-#   'log': ["url to raw log file"]
-#   'usage': "url to resource usage statistics file"
-# }
-#)
+transform = unmarshall(manifest_obj)
+log.info("%%s", json.dump(manifest_obj, indent=4))
+output = transform.run()
 
-# fixme upload files encountered
+result_path = os.path.join(transform.output_prefix(), C.TRANSFORM_RESULT_FILE)
+bunnies.runtime.update_result(result_path, output=output, manifest=manifest_obj, canonical=canonical_obj)
+
 """ % {
     'manifest_s': manifest_s,
     'canonical_s': canonical_s,
-    'uid_s': repr(self.uid)
+    'uid_s': repr(self.uid),
+    'hooks': hooks
 }
+
 
 class BuildGraph(object):
     """Traverse the pipeline graph and obtain a graph of data dependencies"""
@@ -203,7 +215,7 @@ class BuildGraph(object):
             seen.add(node)
 
             # prune if the result is already computed
-            if node.output_ready():
+            if node.output_ready:
                 return True
 
             return False
@@ -220,7 +232,6 @@ def build_target(roots):
     Construct a pipeline execution schedule from a graph of
     data dependencies.
     """
-
     if not isinstance(roots, list):
         roots = [roots]
 

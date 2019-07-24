@@ -7,11 +7,15 @@ An example reprod pipeline which aligns and merges samples
 
 # framework
 import bunnies
+import bunnies.runtime
 
 # experiment specific
 from snpcalling import InputFile, Align, Merge
 
 bunnies.setup_logging()
+
+bunnies.runtime.add_user_deps(".", "snpcalling", exclude_patterns=("__pycache__",))
+bunnies.runtime.add_user_hook("import snpcalling")
 
 ha412     = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta")
 ha412_idx = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta.fai")
@@ -55,19 +59,12 @@ all_merged = [merged_bam1, merged_bam2]
 # - creates graph of dependencies
 pipeline = bunnies.build_target(all_merged)
 
-# pipeline.export_schedule("my_merge.json")
-
-# Assembled pipelines can be archived and distributed.
-# pipeline = reprod.import_pipeline("my_merge.json")
-
-# a URL where we can see details and progress in the browser
+# TODO - a URL where we can see details and progress in the browser (maybe via lambda+apigateway)
 # print(pipeline.dashboard_url())
 
-for job in pipeline.build_order():
-    print("build %s" % job.data)
-    print("transfer_script %s" % job.execution_transfer_script())
+for ijob, job in enumerate(pipeline.build_order()):
+    with open("%05d_exec.py" % (ijob,), "w") as fp:
+        fp.write(job.execution_transfer_script())
 
 
-#compute_env = bunnies.ComputeEnv("merge-example")
-#compute_env.create()
 

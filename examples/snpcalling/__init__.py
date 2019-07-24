@@ -1,7 +1,7 @@
 # -*- charset: utf-8; -*-
 
 import bunnies
-
+import bunnies.unmarshall
 
 def InputFile(url, desc="", digests=None):
     """
@@ -48,7 +48,7 @@ class Align(bunnies.Transform):
     def task_template(cls, compute_env):
         scratchdisk = compute_env.get_disk('scratch')
         if not scratchdisk:
-            raise Exception("Align tasks require a scrach disk")
+            raise Exception("Align tasks require a scratch disk")
 
         return {
             'jobtype': 'batch',
@@ -72,12 +72,13 @@ class Align(bunnies.Transform):
         self.add_named_output("bam", self.sample_name + ".bam")
         self.add_named_output("bai", self.sample_name + ".bai")
 
-
         print("runtime: %s", runtime)
         print("params: %s", params)
         print("inputs: %s", inputs)
         print("outputs: %s", outputs)
         print("kwargs: %s", kwargs)
+
+bunnies.unmarshall.register_kind(Align)
 
 
 class Merge(bunnies.Transform):
@@ -100,3 +101,5 @@ class Merge(bunnies.Transform):
         for i, bam in enumerate(aligned_bams):
             #print(self.sample_name, bam)
             self.add_input(i, bam, desc="aligned input #%d" % (i,))
+
+bunnies.unmarshall.register_kind(Merge)
