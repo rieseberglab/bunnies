@@ -1,3 +1,6 @@
+# Copyright 2019 Jean-Sebastien Legare
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Setuptools bunnies platform module
 """
