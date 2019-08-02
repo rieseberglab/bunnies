@@ -103,12 +103,12 @@ These resources are created using the scripts provided in
 
    - You will need to create `./storage-settings.json` with the name of a bucket you intend to use as temporary storage. Example contents:
 
-         {
-	   "storage": {
-              "tmp_bucket": "reprod-temp-bucket",
-              "build_bucket": "reprod-build-bucket"
-	   }
-         }
+        {
+          "storage": {
+            "tmp_bucket": "reprod-temp-bucket",
+            "build_bucket": "reprod-build-bucket"
+	      }
+        }
 
    - `./scripts/setup-key-pair.sh` creates the keypair that will be associated with the new instances. This will be the key to use
      to ssh into the created VMs or containers. Outputs `./key-pair-settings.json` and `key-pair.pem` private key.
