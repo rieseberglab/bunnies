@@ -62,6 +62,9 @@ class BuildNode(object):
             self._output_ready = self.data.exists()
         return self._output_ready
 
+    def run(self):
+        XXX
+
     def execution_transfer_script(self):
         """
         Create a self-standing script that executes just the one node

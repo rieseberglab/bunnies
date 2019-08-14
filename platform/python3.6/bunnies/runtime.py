@@ -6,16 +6,34 @@ import os.path
 import json
 import io
 import logging
-import fnmatch
+import subprocess
+import shutil
+import tempfile
+import zipfile
 
 from .unmarshall import unmarshall
-from .utils import load_json, get_blob_ctx
+from .utils import load_json, get_blob_ctx, parse_digests, walk_tree
 from .exc import NoSuchFile
 
 from . import transfers
+from . import constants
+from .config import config, active_config_files
+from . import data_import
 
 log = logging.getLogger(__package__)
 
+
+#
+# This is a hack. We point to the directory containing the setup.py for the platform code.
+# Ideally, we'd be able to copy over the exact same version that is locally installed.
+#
+PLATFORM_SRC = os.path.join(os.path.dirname(__file__), "..")
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+PLATFORM_EXTRA = [
+    {"src": fpath,
+     "dst": os.path.join(constants.PLATFORM, name)}
+    for name, fpath in active_config_files().items()
+]
 
 def add_user_deps(root, includepath, excludes=(), exclude_patterns=()):
     """
@@ -23,32 +41,25 @@ def add_user_deps(root, includepath, excludes=(), exclude_patterns=()):
 
     Include everything under <root>/<includepath>  (recursively, including empty folders),
     except files matching exactly one of the `excludes`, or one of the patterns in `exclude_patterns` (fnmatch)
+
+    files on the remote will be accessible relative to <root>. i.e. add_user_deps("a", "b") will make "a/b" available
+    as "b" on the remote.
+
     """
-    def _is_included(dirname, basename):
-        if basename in excludes or any([fnmatch.fnmatchcase(basename, patt) for patt in exclude_patterns]):
-            return
-
-        fullname = os.path.join(dirname, basename)
-        relname = os.path.relpath(fullname, root)
-        return (fullname, relname)
-
     included = []
-    for parent, dirs, files in os.walk(os.path.join(root, includepath)):
-        for basename in files:
-            tup = _is_included(parent, basename)
-            if tup:
-                included.append(tup)
-        for basename in dirs:
-            tup = _is_included(parent, basename)
-            if tup:
-                included.append(tup)
+
+    for fullname in walk_tree(os.path.join(root, includepath), excludes=excludes, exclude_patterns=exclude_patterns):
+        relname = os.path.relpath(fullname, root)
+        included.append({"src": fullname, "dst": relname})
 
     log.info("%d new file(s) marked as user dependencies", len(included))
     for f in included:
         log.debug("marked file %s as a dependency (remote-name: %s)",
-                  f[0], f[1])
+                  f["src"], f["dst"])
 
     add_user_deps._files += included
+
+# list of (path_to_source, path_in_dest)
 add_user_deps._files = []
 
 def add_user_hook(python_code):
@@ -82,3 +93,64 @@ def update_result(result_url, logprefix="", **kwargs):
     transfers.s3_streaming_put(fp, result_url, content_type="application/json",
                                meta=None, logprefix=logprefix)
 
+
+def upload_user_context():
+    """packages user and platform dependencies as a zip.
+       uploads the zip under its canonical name.
+
+       returns the URL to the final remote file.
+    """
+
+    # make temp dir to store platform files
+    package_tmpdir = tempfile.mkdtemp(prefix="temp-packaging-", dir=".")
+    try:
+        # hack -- this needs to be done when wrapping the container image
+        log.debug("installing platform module in %s", package_tmpdir)
+        try:
+            cmd = ['pip', 'install', '-t', package_tmpdir, PLATFORM_SRC + "[lambda]"]
+            log.info("command: %s", cmd)
+            subprocess.check_call(cmd)
+        except subprocess.CalledProcessError as cpe:
+            log.error("Command %s exited with error %d. output: %s", cpe.cmd, cpe.returncode, cpe.output)
+            sys.exit(1)
+
+        with tempfile.NamedTemporaryFile(suffix=".zip", prefix="user-files-", dir=package_tmpdir, delete=False) as tmpfd:
+            with zipfile.ZipFile(tmpfd, mode='w', compression=zipfile.ZIP_DEFLATED) as zipfd:
+
+                # include platform python code and dependencies
+                for tozip in walk_tree(package_tmpdir,
+                                       excludes=(".metadata.json", tmpfd.name, "__pycache__"),
+                                       exclude_patterns=("*~",)):
+                    relname = os.path.relpath(tozip, package_tmpdir)
+                    zipfd.write(tozip, arcname=relname)
+                    log.debug("added file %s", relname)
+
+                # add platform extra
+                for entry in PLATFORM_EXTRA:
+                    zipfd.write(entry['src'], arcname=entry['dst'])
+                    log.debug("added file %s", entry['dst'])
+
+                # add user files
+                for entry in add_user_deps._files:
+                    zipfd.write(entry['src'], arcname=entry['dst'])
+                    log.debug("added file %s", entry['dst'])
+
+        log.info("uploading zip file %s to temp bucket %s", tmpfd.name, config['storage']['tmp_bucket'])
+        zip_digests = None
+        with open(tmpfd.name, "rb") as user_zip:
+            hashr = transfers.HashingReader(user_zip)
+            data = '_'
+            while data:
+                data = hashr.read(1024*1024)
+            zip_digests = hashr.hexdigests()
+
+        new_name = "user-package-%s.zip" % (zip_digests['sha1'],)
+        dst_name = "s3://%s/userpkg/%s" % (config['storage']['tmp_bucket'], new_name)
+        importer = data_import.DataImport()
+        importer.import_file("file://%s" % (tmpfd.name,), dst_name, digest_urls=zip_digests)
+        log.debug("user context uploaded to: %s", dst_name)
+        return dst_name
+
+    finally:
+        # cleanup temp files
+        if package_tmpdir: shutil.rmtree(package_tmpdir)

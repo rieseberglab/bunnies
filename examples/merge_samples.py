@@ -14,7 +14,7 @@ from snpcalling import InputFile, Align, Merge
 
 bunnies.setup_logging()
 
-bunnies.runtime.add_user_deps(".", "snpcalling", exclude_patterns=("__pycache__",))
+bunnies.runtime.add_user_deps(".", "snpcalling", excludes=("__pycache__"))
 bunnies.runtime.add_user_hook("import snpcalling")
 
 ha412     = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta")
@@ -66,5 +66,4 @@ for ijob, job in enumerate(pipeline.build_order()):
     with open("%05d_exec.py" % (ijob,), "w") as fp:
         fp.write(job.execution_transfer_script())
 
-
-
+bunnies.runtime.upload_user_context()

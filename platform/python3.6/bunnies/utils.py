@@ -12,6 +12,7 @@ import logging
 import boto3
 import base64
 import glob
+import fnmatch
 
 from botocore.exceptions import ClientError
 from .exc import NoSuchFile
@@ -27,16 +28,19 @@ def data_files(globname):
     return matches
 
 def find_config_file(startdir, filname):
-    """recurse in folder and parents to find filname and open it"""
+    """recurse in folder and parents to find filname and open it
+       returns (fd, path)
+    """
     parent = os.path.dirname(startdir)
     try:
-        return open(os.path.join(startdir, filname), "r")
+        attempt = os.path.join(startdir, filname)
+        return open(attempt, "r"), attempt
     except IOError as ioe:
         if ioe.errno != errno.ENOENT:
             raise
     # reached /
     if parent == startdir:
-        return None
+        return None, None
 
     return find_config_file(parent, filname)
 
@@ -143,9 +147,10 @@ def load_json(obj):
 
 def parse_digests(digests):
     """
-    digests is either a single string digest, or
-    a list of string digests. digest string forms
-    supported:
+    digests is either a single string digest,
+    a list of string digests, or a dictionary of algo:hexdigest keypairs.
+
+    string digest forms supported:
 
       1) "d41d8cd98f00b204e9800998ecf8427e"
       2) "md5:d41d8cd98f00b204e9800998ecf8427e"
@@ -159,7 +164,7 @@ def parse_digests(digests):
     def _atom(orig):
         s = orig
         if s.startswith("hash://"):
-            s = os.path.split(s[7:])[1]
+            s = os.path.split(s[len("hash://"):])[1]
         if ':' in s:
             # e.g. "md5:asdaddas"
             s = s.split(':')[-1]
@@ -175,6 +180,8 @@ def parse_digests(digests):
             raise ValueError("invalid digest string: %s" % (orig,))
         return res
 
+    if isinstance(digests, (dict,)):
+        return dict([_atom(v) for v in digests.values()])
     if not isinstance(digests, (tuple, list)):
         digests = (digests,)
     return dict([_atom(digest) for digest in digests])
@@ -185,3 +192,31 @@ def hex2b64(hexstr):
         raise ValueError("Invalid hexstring")
     hexbits = bytes([(int(hexstr[i], 16) << 4) + int(hexstr[i+1], 16) for i in range(0, len(hexstr), 2)])
     return base64.b64encode(hexbits).decode('ascii')
+
+def walk_tree(rootdir, excludes=(), exclude_patterns=()):
+    """
+    yield files under rootdir, recursively, including empty folders, but
+    excluding special files in excludes, or those matching globs in exclude_patterns
+    """
+    def _is_excluded(comp):
+        return (comp in excludes) or any([fnmatch.fnmatchcase(comp, patt) for patt in exclude_patterns])
+
+    def _get_entry(dirname, basename):
+        if _is_excluded(basename):
+            return
+
+        return os.path.join(dirname, basename)
+
+    for parent, dirs, files in os.walk(rootdir):
+        if any([_is_excluded(comp) for comp in os.path.split(parent)]):
+            continue
+
+        for basename in files:
+            entry = _get_entry(parent, basename)
+            if entry:
+                yield entry
+        for basename in dirs:
+            entry = _get_entry(parent, basename)
+            if entry:
+                yield entry
+

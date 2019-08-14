@@ -17,7 +17,7 @@ from . import utils
 from . import transfers
 from . import constants
 
-from .exc import BunniesException
+from .exc import BunniesException, NoSuchFile
 
 from urllib.parse import urlparse
 log = logging.getLogger(__package__)
@@ -186,6 +186,8 @@ class DataImport(object):
                 log.error("%serror checking for existing file: %s", logpad, clierr.response['Error'],
                           exc_info=clierr)
                 raise ImportError("Error for URL %s: %s" % (dst_url, clierr.response['Error']))
+        except NoSuchFile as clierr:
+            pass
 
         return self.__rehash_copy(src_url, dst_url, src_head['ETag'], match_digests=dst_digests, logprefix=logprefix)
 
@@ -239,6 +241,8 @@ class DataImport(object):
                             log.error("%serror checking for existing file: %s", logpad, clierr.response['Error'],
                                       exc_info=clierr)
                             raise ImportError("Error for URL %s: %s" % (dst_url, clierr.response['Error']))
+                    except NoSuchFile:
+                        pass
 
                 start_time = time.time()
                 # only run the MD5 algorithm
@@ -273,7 +277,7 @@ class DataImport(object):
             # check digests
             xfer_digests = pipe_fp.hexdigests()
             for algo, expected_digest in expected_digests.items():
-                if xfer_digests[algo] != expected_digest:
+                if algo in xfer_digests and xfer_digests[algo] != expected_digest:
                     log.error("%s%s digest mismatch: got %s but expected %s", logpad, algo, xfer_digests[algo], expected_digest)
                     raise ImportError("digest mismatch: got %s but expected %s" % (algo, xfer_digests[algo], expected_digest))
                 else:
