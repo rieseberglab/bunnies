@@ -157,6 +157,8 @@ setup(
 
     # Forget package_data={}. Just rely on MANIFEST.in
     include_package_data=True,
+    #
+    # zip_safe=False allows python module code to (safely) open data files relative to __file__
     zip_safe=False,
 
     # Although 'package_data' is the preferred approach, in some case you may

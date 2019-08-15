@@ -6,6 +6,10 @@
 from .graph import Cacheable, Transform, Target
 from .utils import canonical_hash
 from . import runtime
+from .environment import ComputeEnv
+from . import exc
+from .constants import PLATFORM
+from .containers import wrap_user_image
 
 import json
 
@@ -62,7 +66,7 @@ class BuildNode(object):
             self._output_ready = self.data.exists()
         return self._output_ready
 
-    def run(self):
+    def get_job_definition(self):
         XXX
 
     def execution_transfer_script(self):
@@ -229,9 +233,38 @@ class BuildGraph(object):
             for node in target.postorder(prune_fn=_already_built):
                 yield node
 
+    def build(self, run_name):
+        """run all the jobs that need to be run. managed resources created to build the chosen targets will be tagged with the
+        given run_name. reusing the same name on a subsequent run will allow resources to be reused.
+        """
+
+        compute_env = ComputeEnv(envname)
+
+        log.info("collecting job templates before scheduling")
+        container_images = set()
+
+        # FIXME repeatedly submit the current set of all jobs whose dependencies are satisfied
+        for nodei, node in enumerate(self.build_order()):
+            # check compatibility with compute_environment
+            _ = node.task_template(compute_env)
+
+        num_jobs = nodei + 1
+        log.info("current number of jobs: %d", num_jobs)
+
+        if num_jobs > 0:
+            compute_env.create()
+            compute_env.wait_ready()
+
+        for job in self.build_order():
+            job.schedule(compute_env)
+            compute_env
+
+        for job in self.build_order():
+            XXX
 
 def build_target(roots):
-    """
+
+        """
     Construct a pipeline execution schedule from a graph of
     data dependencies.
     """

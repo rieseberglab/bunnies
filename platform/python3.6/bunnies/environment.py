@@ -309,6 +309,7 @@ class ComputeEnv(object):
         self.disks = {}
         self.launch_template = None
         self.batch_ce = None
+        self.submissions = [] # result of submit_job
 
         if scratch_size_gb > 0:
             self.disks['scratch'] = {
@@ -624,7 +625,10 @@ runcmd:
         submission = jobs.submit_job(job_name, queue_arn,
                                      job_def, command,
                                      vcpus, memory)
-        return submission
+        self.submissions += submission
+
+    def wait_for_jobs(self):
+        return jobs.wait_for_completion([sub['jobId'] for sub in self.submissions])
 
     def wait_deleted(self):
         """ensure all the entities are deleted completely"""

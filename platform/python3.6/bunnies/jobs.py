@@ -6,6 +6,8 @@ import json
 import logging
 import os.path
 import botocore.waiter
+import time
+
 from botocore.exceptions import ClientError
 logger = logging.getLogger(__package__)
 
@@ -313,6 +315,40 @@ def submit_job(name, queue, jobdef, command, vcpu, memory, timeout_secs=1000):
     logger.info("job submitted %s", submission)
     return submission
 
+def describe_jobs(jobs):
+    # max 100 at a time
+    all_jobs = []
+
+    client = boto3.client("batch")
+
+    for c in range(0, (len(jobs) + 99) // 100):
+        jobids = jobs[100*c:100*c+100]
+        res = client.describe_jobs(jobs=jobids)
+        all_jobs += res['jobs']
+
+    return all_jobs
+
+def wait_for_completion(jobs, period=2*60):
+    """wait for the given jobs to either be SUCCEEDED, or FAILED.
+       this calls describe_jobs repeatedly
+    """
+    while True:
+        desc = describe_jobs(jobs)
+        status_map = {}
+        incomplete = 0
+        for job in desc:
+            status_map.set_default(job['status'], []).append(job['jobId'])
+            if job['status'] not in ('SUCCEEDED', 'FAILED'):
+                incomplete += 1
+
+        if incomplete > 0:
+            logger.info("waiting for %d jobs to complete:", incomplete)
+            for status in sorted(status_map.keys()):
+                logger.info("    %-10s: %s ...", status.lower(), status_map[status][0:5])
+            time.sleep(period)
+            continue
+
+    return desc
 
 def _test_jobs(**kwargs):
     from .config import config
