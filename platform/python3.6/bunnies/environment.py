@@ -17,6 +17,7 @@ from .config import config
 from . import constants
 from .utils import data_files
 from . import jobs
+from .constants import PLATFORM
 
 logger = logging.getLogger(__package__)
 
@@ -310,6 +311,7 @@ class ComputeEnv(object):
         self.launch_template = None
         self.batch_ce = None
         self.submissions = [] # result of submit_job
+        self.job_definitions = {} # keyed by (name, image)
 
         if scratch_size_gb > 0:
             self.disks['scratch'] = {
@@ -317,6 +319,19 @@ class ComputeEnv(object):
                 'obj': FSxDisk(name + "-scratch", scratch_size_gb),
                 'instance_mountpoint': "/mnt/" + name + "-scratch"
             }
+
+    def register_simple_batch_jobdef(self, name, container_image):
+        if (name, image) not in self.job_definitions:
+            batch_def = jobs.AWSBatchSimpleJobDef(name, image)
+            batch_def.register()
+            self.job_definitions[(name, image)] = batch_def
+        return self.job_definitions[(name, image)]
+
+    def submit_simple_batch_job(self, job_name, job_def, **job_params):
+        job_obj = jobs.AWSBatchSimpleJob(job_name, job_def, **job_params)
+        queue_arn = self.job_queue['jobQueueArn']
+        submission = job_obj.submit(queue_arn)
+        self.submissions += submission
 
     def get_disk(self, diskname):
         if diskname in self.disks:
@@ -619,13 +634,6 @@ runcmd:
 
         wait_batch_ce_ready([self.batch_ce['computeEnvironmentName']])
         jobs.wait_queue_ready([self.job_queue['jobQueueArn']])
-
-    def submit_job(self, job_name, job_def, command, vcpus, memory):
-        queue_arn = self.job_queue['jobQueueArn']
-        submission = jobs.submit_job(job_name, queue_arn,
-                                     job_def, command,
-                                     vcpus, memory)
-        self.submissions += submission
 
     def wait_for_jobs(self):
         return jobs.wait_for_completion([sub['jobId'] for sub in self.submissions])

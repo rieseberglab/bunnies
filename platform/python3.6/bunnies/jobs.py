@@ -2,6 +2,9 @@
 import boto3
 from .constants import PLATFORM
 from .utils import data_files
+from .containers import wrap_user_image
+from .config import config
+
 import json
 import logging
 import os.path
@@ -10,6 +13,43 @@ import time
 
 from botocore.exceptions import ClientError
 logger = logging.getLogger(__package__)
+
+
+class AWSBatchSimpleJobDef(object):
+    def __init__(self, name, image_name):
+        self.name = name
+        self.src_image = image_name
+        self.platform_image = None
+        self.jobdef = None
+
+    def register(self, compute_env):
+        """register the job definition for this image on the given compute environment"""
+
+        # mount all available volumes
+        volumes = [{'name': disk['name'], 'host_src': disk['instance_mountpoint'], 'dst': os.path.join("/", disk['name'])}
+                   for disk in ce.disks.values()]
+
+        # wrap the user's image with the platform harness
+        self.platform_image = wrap_user_image(self.src_image)
+
+        role = config['job_role_arn']
+        self.jobdef = make_jobdef(PLATFORM + "-" + self.name, role, self.platform_image, mounts=volumes, reuse=True)
+
+    @property
+    def arn(self):
+        return self.jobdef['jobDefinitionArn']
+
+
+class AWSBatchSimpleJob(object):
+    def __init__(self, name, jobdef, **overrides):
+        self.name = name
+        self.jobdef = jobdef
+        self.overrides = overrides
+        self.job = None
+
+    def submit(self, queue_arn):
+        self.job = submit_job(self.name, queue_arn, self.jobdef, **self.overrides)
+        return self.job
 
 
 def _custom_waiters():
@@ -200,7 +240,29 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
     """
     client = boto3.client('batch')
 
-    def jobdef_exists(client, name, status=("ACTIVE",)):
+    def _deep_matches(expected, obj):
+        """extracts fields of the job definition that should be compared for equality"""
+        if isinstance(expected, dict):
+            if not isinstance(obj, dict):
+                return False
+            for k in expected:
+                if k not in obj:
+                    return False
+                if not _deep_matches(expected[k], obj[k]):
+                    return False
+            return True
+        if isinstance(expected, (list, tuple)):
+            if not isinstance(obj, (list, tuple)):
+                return False
+            if len(expected) != len(obj):
+                return False
+            for i in range(0, len(expected)):
+                if not _deep_matches(expected[i], obj[i]):
+                    return False
+            return True
+        return expected == obj
+
+    def jobdef_exists(client, match_spec):
         paginator = client.get_paginator('describe_job_definitions')
         def_iterator = paginator.paginate(jobDefinitionName=name)
         found = None
@@ -208,19 +270,13 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
             page_defs = page['jobDefinitions']
             if len(page_defs) == 0:
                 break
-            found = [pdef for pdef in page_defs if
-                     pdef['jobDefinitionName'] == name and pdef['status'] in status]
+
+            found = [pdef for pdef in page_defs if _deep_matches(match_spec, pdef)]
             if found:
                 break
         if not found:
             return None
         return found[0]
-
-    if reuse:
-        existing = jobdef_exists(client, name)
-        if existing:
-            logger.info("reusing existing job definition %s (Arn=%s)", name, existing['jobDefinitionArn'])
-            return existing
 
     volumes = [
         {
@@ -240,15 +296,12 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
         for mnt in mounts
     ]
 
-    logger.info("creating job definition %s with image %s...", name, image)
-    jd = client.register_job_definition(
-        jobDefinitionName=name,
-        type='container',
-        containerProperties={
+    new_def = {
+        'jobDefinitionName': name,
+        'type': 'container',
+        'containerProperties': {
             'image': image,
-            'vcpus': vcpus,
-            'memory': memory,
-            'jobRoleArn': jobroleArn,
+            'jobRoleArn': jobRoleArn,
             'volumes': volumes,
             'mountPoints': mountPoints,
             'privileged': False,
@@ -259,19 +312,43 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
                 }
             ],
             'user': 'root'
-        },
-        retryStrategy={
+        }
+    }
+
+    if reuse:
+        existing = jobdef_exists(client, new_def)
+        if existing:
+            logger.info("reusing existing job definition %s (Arn=%s)", name, existing['jobDefinitionArn'])
+            return existing
+
+    logger.info("creating job definition %s with image %s...", name, image)
+    new_def['containerProperties'].update({
+        'vcpus': vcpus,
+        'memory': memory
+    })
+    new_def.update({
+        "retryStrategy": {
             'attempts': 1
         },
-        timeout={
+        "timeout": {
             'attemptDurationSeconds': 600
         }
-    )
+    })
+
+    #
+    # returns:
+    # {
+    #     'jobDefinitionName': 'string',
+    #     'jobDefinitionArn': 'string',
+    #     'revision': 123
+    # }
+    jd = client.register_job_definition(**new_def)
+
     logger.info("job definition %s created (Arn=%s)", name, jd['jobDefinitionArn'])
     return jd
 
 
-def submit_job(name, queue, jobdef, command, vcpu, memory, timeout_secs=1000):
+def submit_job(name, queue, jobdef, command=None, vcpu=None, memory=None, environment=None, attempts=1, timeout_secs=1000):
     """
     args:
       name: name of the job
@@ -279,7 +356,9 @@ def submit_job(name, queue, jobdef, command, vcpu, memory, timeout_secs=1000):
       jobdef: the name of the queue (name:revision) or arn
       command: [str, str, str, ...] to override the job definition command
       vcpu: int  (overrides job def)
-      memory: int  (overrides job def)
+      memory: int  (MiB. overrides job def)
+      attempts: number of times to move the job into runnable state (1 <= n <= 10) (overrides job def)
+      environment: key-value pairs. adds or redefines environment variables from job definition. keys must not start with AWS_BATCH.
     """
     logger.info("submitting job %(name)s/%(jobdef)s to queue %(queue)s: %(vcpu)s vcpus %(memory)sMB %(command)s",
                 {"name": name,
@@ -290,28 +369,31 @@ def submit_job(name, queue, jobdef, command, vcpu, memory, timeout_secs=1000):
                  "command": command
              })
     client = boto3.client('batch')
-    submission = client.submit_job(
-        jobName=name,
-        jobQueue=queue,
-        dependsOn=[],
-        jobDefinition=jobdef,
-        parameters={},
-        containerOverrides={
-            'vcpus': vcpu,
-            'memory': memory,
-            'command': command,
-            'environment': [
-                {'name': 'BATCH_FILE_TYPE', 'value': 'script'},
-                {'name': 'BATCH_FILE_S3_URL', 'value': 's3://reprod-test-bucket/simple-test-job.sh'}
-            ]
-        },
-        retryStrategy={
-            'attempts': 1
-        },
-        timeout={
-            'attemptDurationSeconds': timeout_secs
-        }
-    )
+
+    cont_overrides = {}
+    if command is not None:
+        cont_overrides['command'] = command
+    if vcpu is not None:
+        cont_overrides['vcpu'] = int(vcpu)
+    if memory is not None:
+        cont_overrides['memory'] = int(memory)
+    if environment is not None:
+        cont_overrides['environment'] = [{'name': k, 'value': v} for k,v in environment.items()]
+
+    job_settings = {
+        'jobName': name,
+        'jobQueue': queue,
+        'dependsOn': [],
+        'jobDefinition': jobdef,
+        'parameters': {},
+        'containerOverrides': cont_overrides
+    }
+    if attempts is not None:
+        job_settings['retryStrategy'] = {'attempts': int(attempts)}
+    if timeout_secs is not None:
+        job_settings['timeout'] = {'attemptDurationSeconds': int(timeout_secs)}
+
+    submission = client.submit_job(**job_settings)
     logger.info("job submitted %s", submission)
     return submission
 
@@ -351,7 +433,6 @@ def wait_for_completion(jobs, period=2*60):
     return desc
 
 def _test_jobs(**kwargs):
-    from .config import config
     role = config['job_role_arn']
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
 

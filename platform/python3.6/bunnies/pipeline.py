@@ -10,9 +10,12 @@ from .environment import ComputeEnv
 from . import exc
 from .constants import PLATFORM
 from .containers import wrap_user_image
+from . import jobs
 
 import json
+import logging
 
+log = logging.getLogger(__name__)
 
 class PipelineException(Exception):
     pass
@@ -20,13 +23,14 @@ class PipelineException(Exception):
 
 class BuildNode(object):
     """graph of buildable things with dependencies"""
-    __slots__ = ("data", "deps", "_uid", "_output_ready")
+    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef")
 
     def __init__(self, data):
         self.data = data  # Cacheable
         self.deps = []    # BuildNodes
         self._uid = None
         self._output_ready = None
+        self._jobdef = None
 
     @property
     def uid(self):
@@ -66,8 +70,39 @@ class BuildNode(object):
             self._output_ready = self.data.exists()
         return self._output_ready
 
-    def get_job_definition(self):
-        XXX
+    def register_job_definition(self, compute_env):
+        if isinstance(self.data, Transform):
+            template = self.data.task_template(compute_env)
+            if template.get('jobtype', None) != "batch":
+                raise exc.BunniesException("job %s has an unknown template jobtype: %s", template.get('jobtype', None))
+            if not template.get('image', None):
+                raise exc.BunniesException("job %s has an invalid template image: %s", template.get('image', None))
+
+            self._jobdef = compute_env.register_simple_batch_jobdef(self.data.name, template.get('image'))
+            return
+        log.warn("no job definition registered for build node: %s", self.data)
+
+    def schedule(self, compute_env):
+        if isinstance(self.data, Transform):
+            # let the user's object calculate its resource requirements
+            resources = self.data.task_resources() or {}
+
+            # this id is globally unique
+            job_id = self.data.name + "-" + self.uid
+
+            settings = {
+                'vcpu': resources.get('vcpu', None),
+                'memory': resources.get('memory', None),
+                'timeout': resources.get('timeout', None),
+                'environment': {
+                    "BUNNIES_TRANSFER_SCRIPT": URL_TO_EXEC_TRANSFER_SCRIPT,
+                    "BUNNIES_USER_DEPS": URL_TO_USER_DEPS_ZIP,
+                    "BUNNIES_JOBID": job_id
+                }
+            }
+            compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
+            return
+        raise NotImplemented("cannot schedule non-Transform objects")
 
     def execution_transfer_script(self):
         """
@@ -240,13 +275,11 @@ class BuildGraph(object):
 
         compute_env = ComputeEnv(envname)
 
-        log.info("collecting job templates before scheduling")
-        container_images = set()
-
-        # FIXME repeatedly submit the current set of all jobs whose dependencies are satisfied
         for nodei, node in enumerate(self.build_order()):
             # check compatibility with compute_environment
-            _ = node.task_template(compute_env)
+            # wrap container images.
+            # create schedulable entities
+            job_def = node.register_job_definition(compute_env)
 
         num_jobs = nodei + 1
         log.info("current number of jobs: %d", num_jobs)
@@ -255,16 +288,13 @@ class BuildGraph(object):
             compute_env.create()
             compute_env.wait_ready()
 
+        # FIXME repeatedly submit the current set of all jobs whose dependencies are satisfied
         for job in self.build_order():
             job.schedule(compute_env)
-            compute_env
-
-        for job in self.build_order():
-            XXX
+            compute_env.wait_for_jobs()
 
 def build_target(roots):
-
-        """
+    """
     Construct a pipeline execution schedule from a graph of
     data dependencies.
     """
