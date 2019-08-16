@@ -13,6 +13,7 @@ import boto3
 import base64
 import glob
 import fnmatch
+import subprocess
 
 from botocore.exceptions import ClientError
 from .exc import NoSuchFile
@@ -220,3 +221,31 @@ def walk_tree(rootdir, excludes=(), exclude_patterns=()):
             if entry:
                 yield entry
 
+
+def run_cmd(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, log_on_err=True,
+        show_out=False, cwd=None, log_cmd=True, **kwargs):
+    """run a command -- wrapper around subprocess """
+
+    if cwd and cwd != ".":
+        if log_cmd:
+            logger.debug("+CMD (cwd %s) %s", cwd, " ".join([repr(x) for x in args]))
+    else:
+        if log_cmd:
+            logger.debug("+CMD %s", " ".join([repr(x) for x in args]))
+
+    proc = subprocess.run(args, stdout=stdout, stderr=stderr, check=False, cwd=cwd, **kwargs)
+    if proc.returncode != 0 and log_on_err:
+        logger.error("command returned code %d", proc.returncode)
+        if stdout == subprocess.PIPE:
+            for line in proc.stdout.decode('utf-8').splitlines():
+                logger.error("out: %s", line)
+        if stderr == subprocess.PIPE:
+            for line in proc.stderr.decode('utf-8').splitlines():
+                logger.error("err: %s", line)
+    if proc.returncode == 0 and show_out and stdout == subprocess.PIPE:
+        for line in proc.stdout.decode('utf-8').splitlines():
+            logger.error("out: %s", line)
+
+    if check:
+        proc.check_returncode()
+    return proc

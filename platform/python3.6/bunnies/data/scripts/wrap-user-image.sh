@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 
 #
-# install bunnies container base tools around an
-# existing container with the user's tools.
+# install platform entrypoint and dependencies as a new layer of an existing image.
+#
+# The resulting image will be uploaded to an ECR repository of the destination name.
+# Unless specified the destination has the same name as the source, but the tag is
+# <srctag>-bunnies.
+#
+# usage:  wrap-user-image.sh srcimage [dstimage]
+#
 #
 
-imgname="$1"
+set -Exo pipefail
+
 BUILDDIR=$(mktemp -d -p . "build.docker.XXXX")
 SCRIPTSDIR=$(dirname "$(readlink -f "$0")")
-
-set -Exo pipefail
-[[ -n "$imgname" ]]
 
 function do_cleanup ()
 {
@@ -31,6 +35,29 @@ function ensure_repo ()
 }
 
 trap do_cleanup EXIT
+
+DO_PUSH=1
+POSARGS=()
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+	--nopush)
+	    DO_PUSH=0
+	    ;;
+	*)
+	    POSARGS+=("$1")
+	    ;;
+    esac
+    shift
+done
+
+imgname="${POSARGS[0]}"
+dstimgname="${POSARGS[1]}"
+
+if [[ -z "$imgname" ]]; then
+    echo "missing source image name" >&2
+    exit 1
+fi
+
 
 # AMI
 # apt-get install -y libreadline7
@@ -76,17 +103,23 @@ cp -a "$SCRIPTSDIR"/entrypoint/bunnies_entrypoint.sh "$BUILDDIR"/
 
 srcrepo="${imgname%%:*}"
 srctag="${imgname##*:}"
-if [[ "$srctag" == "" ]]; then srctag=latest; fi
+if [[ "$srctag" == "" ]]; then
+    srctag=latest;
+fi
 
-dstrepo="${srcrepo}"
-dsttag="${srctag}-bunnies"
+if [[ -n "$dstimgname" ]]; then
+    dstrepo="${dstimgname%%:*}"
+    dsttag="${dstimgname##*:}"
+else
+    dstrepo="${srcrepo}"
+    dsttag="${srctag}-bunnies"
+fi
 
 docker build -t "${dstrepo}:${dsttag}" "$BUILDDIR"
 
-# aws ecr get-login
-
-ecsrepo=$(ensure_repo "${srcrepo}")
-
-docker tag "${dstrepo}:${dsttag}" "$ecsrepo:$dsttag"
-docker push "$ecsrepo:$dsttag"
-
+if [[ ${DO_PUSH} == 1 ]]; then
+    # aws ecr get-login
+    ecsrepo=$(ensure_repo "${dstrepo}")
+    docker tag "${dstrepo}:${dsttag}" "$ecsrepo:$dsttag"
+    docker push "$ecsrepo:$dsttag"
+fi
