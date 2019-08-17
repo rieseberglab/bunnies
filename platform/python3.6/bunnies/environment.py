@@ -11,6 +11,8 @@ import base64
 import boto3
 import botocore
 import botocore.waiter
+import re
+
 from botocore.exceptions import ClientError
 
 from .config import config
@@ -305,8 +307,14 @@ class FSxDisk(object):
 
 
 class ComputeEnv(object):
+
     def __init__(self, name, scratch_size_gb=3600):
-        self.name = name
+
+        #NAME_RE = re.compile("^[-a-zA-Z0-9_]{1,128}$")
+        valid_name = "".join([x if (x.isalnum() or x in "_-") else "_" for x in name])
+        valid_name = valid_name[0:128]
+
+        self.name = valid_name
         self.disks = {}
         self.launch_template = None
         self.batch_ce = None
@@ -321,11 +329,11 @@ class ComputeEnv(object):
             }
 
     def register_simple_batch_jobdef(self, name, container_image):
-        if (name, image) not in self.job_definitions:
-            batch_def = jobs.AWSBatchSimpleJobDef(name, image)
-            batch_def.register()
-            self.job_definitions[(name, image)] = batch_def
-        return self.job_definitions[(name, image)]
+        if (name, container_image) not in self.job_definitions:
+            batch_def = jobs.AWSBatchSimpleJobDef(name, container_image)
+            batch_def.register(self)
+            self.job_definitions[(name, container_image)] = batch_def
+        return self.job_definitions[(name, container_image)]
 
     def submit_simple_batch_job(self, job_name, job_def, **job_params):
         job_obj = jobs.AWSBatchSimpleJob(job_name, job_def, **job_params)

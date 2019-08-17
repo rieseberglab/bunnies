@@ -17,7 +17,7 @@ class Align(bunnies.Transform):
     """
     Align a paired-end fastq or sra file against a reference genome
     """
-    ALIGN_IMAGE = "rieseberglab:5-2.3.0"
+    ALIGN_IMAGE = "rieseberglab/analytics:5-2.3.2"
     VERSION = "1"
 
     __slots__ = ("sample_name", "r1", "r2", "ref", "ref_idx")
@@ -101,5 +101,24 @@ class Merge(bunnies.Transform):
         for i, bam in enumerate(aligned_bams):
             #print(self.sample_name, bam)
             self.add_input(i, bam, desc="aligned input #%d" % (i,))
+
+    @classmethod
+    def task_template(cls, compute_env):
+        scratchdisk = compute_env.get_disk('scratch')
+        if not scratchdisk:
+            raise Exception("Merge tasks require a scratch disk")
+
+        return {
+            'jobtype': 'batch',
+            'image': cls.MERGE_IMAGE
+        }
+
+    def task_resources(self, **kwargs):
+        # adjust resources based on inputs and job parameters
+        return {
+            'vcpu': 4,
+            'memory': 4000,
+            'timeout': -1
+        }
 
 bunnies.unmarshall.register_kind(Merge)

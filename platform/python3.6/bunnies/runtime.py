@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 from .unmarshall import unmarshall
-from .utils import load_json, get_blob_ctx, parse_digests, walk_tree
+from .utils import load_json, get_blob_ctx, parse_digests, walk_tree, run_cmd
 from .exc import NoSuchFile
 
 from . import transfers
@@ -94,26 +94,23 @@ def update_result(result_url, logprefix="", **kwargs):
                                meta=None, logprefix=logprefix)
 
 
-def upload_user_context():
+def upload_user_context(output_prefix):
     """packages user and platform dependencies as a zip.
        uploads the zip under its canonical name.
 
        returns the URL to the final remote file.
     """
+    if upload_user_context.cache.get(output_prefix, None) is not None:
+        return upload_user_context.cache[output_prefix]
 
     # make temp dir to store platform files
     package_tmpdir = tempfile.mkdtemp(prefix="temp-packaging-", dir=".")
     try:
         # hack -- this needs to be done when wrapping the container image
         log.debug("installing platform module in %s", package_tmpdir)
-        try:
-            cmd = ['pip', 'install', '-t', package_tmpdir, PLATFORM_SRC + "[lambda]"]
-            log.info("command: %s", cmd)
-            subprocess.check_call(cmd)
-        except subprocess.CalledProcessError as cpe:
-            log.error("Command %s exited with error %d. output: %s", cpe.cmd, cpe.returncode, cpe.output)
-            sys.exit(1)
+        run_cmd(['pip', 'install', '-t', package_tmpdir, PLATFORM_SRC + "[lambda]"])
 
+        log.info("preparing user context for upload...")
         with tempfile.NamedTemporaryFile(suffix=".zip", prefix="user-files-", dir=package_tmpdir, delete=False) as tmpfd:
             with zipfile.ZipFile(tmpfd, mode='w', compression=zipfile.ZIP_DEFLATED) as zipfd:
 
@@ -135,7 +132,8 @@ def upload_user_context():
                     zipfd.write(entry['src'], arcname=entry['dst'])
                     log.debug("added file %s", entry['dst'])
 
-        log.info("uploading zip file %s to temp bucket %s", tmpfd.name, config['storage']['tmp_bucket'])
+        log.info("uploading user_context %s ==> %s", tmpfd.name, output_prefix)
+
         zip_digests = None
         with open(tmpfd.name, "rb") as user_zip:
             hashr = transfers.HashingReader(user_zip)
@@ -145,12 +143,16 @@ def upload_user_context():
             zip_digests = hashr.hexdigests()
 
         new_name = "user-package-%s.zip" % (zip_digests['sha1'],)
-        dst_name = "s3://%s/userpkg/%s" % (config['storage']['tmp_bucket'], new_name)
+        dst_name = os.path.join(output_prefix, new_name)
         importer = data_import.DataImport()
         importer.import_file("file://%s" % (tmpfd.name,), dst_name, digest_urls=zip_digests)
-        log.debug("user context uploaded to: %s", dst_name)
+        log.info("user context uploaded to: %s", dst_name)
+
+        upload_user_context.cache[output_prefix] = dst_name
         return dst_name
 
     finally:
         # cleanup temp files
         if package_tmpdir: shutil.rmtree(package_tmpdir)
+
+upload_user_context.cache = {}

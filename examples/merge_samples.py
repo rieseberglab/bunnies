@@ -8,11 +8,13 @@ An example reprod pipeline which aligns and merges samples
 # framework
 import bunnies
 import bunnies.runtime
+import os
+import logging
 
 # experiment specific
 from snpcalling import InputFile, Align, Merge
 
-bunnies.setup_logging()
+bunnies.setup_logging(logging.DEBUG)
 
 bunnies.runtime.add_user_deps(".", "snpcalling", excludes=("__pycache__"))
 bunnies.runtime.add_user_hook("import snpcalling")
@@ -62,8 +64,7 @@ pipeline = bunnies.build_target(all_merged)
 # TODO - a URL where we can see details and progress in the browser (maybe via lambda+apigateway)
 # print(pipeline.dashboard_url())
 
-for ijob, job in enumerate(pipeline.build_order()):
-    with open("%05d_exec.py" % (ijob,), "w") as fp:
-        fp.write(job.execution_transfer_script())
-
-bunnies.runtime.upload_user_context()
+#
+# Tag all entities with the name of the program
+#
+pipeline.build(os.path.basename(__file__))

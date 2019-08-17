@@ -23,11 +23,16 @@ class AWSBatchSimpleJobDef(object):
         self.jobdef = None
 
     def register(self, compute_env):
-        """register the job definition for this image on the given compute environment"""
+        """register the job definition for this image on the given compute environment
 
-        # mount all available volumes
+           the job definition will be configured with the mount points defined in the compute environment.
+        """
+
+        #
+        # mount all available volumes in the container
+        #
         volumes = [{'name': disk['name'], 'host_src': disk['instance_mountpoint'], 'dst': os.path.join("/", disk['name'])}
-                   for disk in ce.disks.values()]
+                   for disk in compute_env.disks.values()]
 
         # wrap the user's image with the platform harness
         self.platform_image = wrap_user_image(self.src_image)
@@ -220,7 +225,7 @@ def make_jobqueue(name, priority=100, compute_envs=()):
         raise
 
 
-def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse=True):
+def make_jobdef(name, job_role_arn, image, vcpus=1, memory=128, mounts=None, reuse=True):
     """create/update a new job definition for a simple (single-container)
     job. if there already exists at least one revision of the given name,
     then the existing job definition is returned (reuse=True), or it is
@@ -301,7 +306,7 @@ def make_jobdef(name, jobroleArn, image, vcpus=1, memory=128, mounts=None, reuse
         'type': 'container',
         'containerProperties': {
             'image': image,
-            'jobRoleArn': jobRoleArn,
+            'jobRoleArn': job_role_arn,
             'volumes': volumes,
             'mountPoints': mountPoints,
             'privileged': False,

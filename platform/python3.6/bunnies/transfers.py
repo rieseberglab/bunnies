@@ -170,15 +170,15 @@ def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_lengt
     if meta:
         extra_args['Metadata'].update(meta)
 
-    log.info("%s S3-PutObject bucket:%s key:%s extra:%s",
+    log.debug("%s S3-PutObject bucket:%s key:%s extra:%s",
              logprefix, bucketname, keyname, extra_args)
 
     try:
         completed = s3.put_object(Bucket=bucketname, Key=keyname,
                                   Body=inputfp,
                                   **extra_args)
-        log.info("%s completed simple streaming upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname,
-                 completed['ETag'])
+        log.debug("%s completed simple streaming upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname,
+                  completed['ETag'])
         return completed
 
     except ClientError as clierr:
@@ -190,6 +190,8 @@ def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_lengt
 def s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, content_encoding=None, meta=None, logprefix=""):
     """
     Upload the inputfile (fileobj) using a multipart approach.
+
+    FIXME -- The XML Schema breaks if there are no parts (size 0)
     """
     bucketname, keyname = utils.s3_split_url(outputurl)
     if not keyname:
@@ -211,7 +213,7 @@ def s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, c
     if meta:
         extra_args['Metadata'].update(meta)
 
-    log.info("%s S3-PutObject multipart bucket:%s key:%s extra:%s",
+    log.debug("%s S3-PutObject multipart bucket:%s key:%s extra:%s",
              logprefix, bucketname, keyname, extra_args)
 
     mpart = None
@@ -247,13 +249,15 @@ def s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, c
         del chunk_iter
 
         # finish it
-        log.info("%s completing multipart upload bucket:%s key:%s ...", logprefix, bucketname, keyname)
+        parts_document = {
+            'Parts': [{'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts]
+        }
+
+        log.debug("%s completing multipart upload bucket:%s key:%s %s...", logprefix, bucketname, keyname, parts_document)
         completed = s3.complete_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'],
-                                                 MultipartUpload={
-                                                     'Parts': [{'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts]
-                                                 })
+                                                 MultipartUpload=parts_document)
         mpart = None
-        log.info("%s completed multipart upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname, completed['ETag'])
+        log.debug("%s completed multipart upload bucket:%s key:%s etag:%s", logprefix, bucketname, keyname, completed['ETag'])
         return completed
 
     except ClientError as clierr:
@@ -264,6 +268,6 @@ def s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, c
         if mpart:
             try:
                 s3.abort_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'])
-                log.info("%s multipart upload aborted.", logprefix)
+                log.debug("%s multipart upload aborted.", logprefix)
             except Exception as exc:
                 log.error("%s could not abort multipart upload:", logprefix, exc_info=exc)

@@ -3,17 +3,20 @@
   The utilities here take a pipeline specification and convert
   them into a list of tasks to execute.
 """
+from . import runtime
+from . import exc
+from . import jobs
 from .graph import Cacheable, Transform, Target
 from .utils import canonical_hash
-from . import runtime
 from .environment import ComputeEnv
-from . import exc
 from .constants import PLATFORM
 from .containers import wrap_user_image
-from . import jobs
+from .transfers import s3_streaming_put
+from .config import config
 
 import json
 import logging
+import io
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +74,9 @@ class BuildNode(object):
         return self._output_ready
 
     def register_job_definition(self, compute_env):
+        # FIXME -- the compute environment should register the job definition lazily.
+        #          It's a bit odd to do it in two separate steps, especially if most
+        #          resource settings are overridden in the first place.
         if isinstance(self.data, Transform):
             template = self.data.task_template(compute_env)
             if template.get('jobtype', None) != "batch":
@@ -90,16 +96,37 @@ class BuildNode(object):
             # this id is globally unique
             job_id = self.data.name + "-" + self.uid
 
+            remote_script_url = "s3://%(bucket)s/jobs/%(envname)s/%(jobid)s/jobscript" % {
+                "bucket": config['storage']['tmp_bucket'],
+                "envname": compute_env.name,
+                "jobid": job_id
+            }
+
+            user_deps_prefix = "s3://%(bucket)s/user_context/%(envname)s/" % {
+                "bucket": config['storage']['tmp_bucket'],
+                "envname": compute_env.name,
+                "jobid": job_id
+            }
+
+            user_deps_url = runtime.upload_user_context(user_deps_prefix)
+
+            with io.BytesIO() as exec_fp:
+                script_len = exec_fp.write(self.execution_transfer_script().encode('utf-8'))
+                exec_fp.seek(0)
+                log.debug("uploading job script for job_id %s at %s ...", job_id, remote_script_url)
+                s3_streaming_put(exec_fp, remote_script_url, content_type="text/x-python", content_length=script_len, logprefix=job_id + " ")
+
             settings = {
                 'vcpu': resources.get('vcpu', None),
                 'memory': resources.get('memory', None),
                 'timeout': resources.get('timeout', None),
                 'environment': {
-                    "BUNNIES_TRANSFER_SCRIPT": URL_TO_EXEC_TRANSFER_SCRIPT,
-                    "BUNNIES_USER_DEPS": URL_TO_USER_DEPS_ZIP,
+                    "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
+                    "BUNNIES_USER_DEPS": user_deps_url,
                     "BUNNIES_JOBID": job_id
                 }
             }
+
             compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
             return
         raise NotImplemented("cannot schedule non-Transform objects")
@@ -273,7 +300,7 @@ class BuildGraph(object):
         given run_name. reusing the same name on a subsequent run will allow resources to be reused.
         """
 
-        compute_env = ComputeEnv(envname)
+        compute_env = ComputeEnv(run_name)
 
         for nodei, node in enumerate(self.build_order()):
             # check compatibility with compute_environment

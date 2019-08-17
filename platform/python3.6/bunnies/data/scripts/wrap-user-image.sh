@@ -11,7 +11,7 @@
 #
 #
 
-set -Exo pipefail
+set -exo pipefail
 
 BUILDDIR=$(mktemp -d -p . "build.docker.XXXX")
 SCRIPTSDIR=$(dirname "$(readlink -f "$0")")
