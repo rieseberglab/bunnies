@@ -58,9 +58,9 @@ class Align(bunnies.Transform):
     def task_resources(self, **kwargs):
         # adjust resources based on inputs and job parameters
         return {
-            'vcpu': 4,
+            'vcpus': 4,
             'memory': 4000,
-            'timeout': -1
+            'timeout': 4*3600
         }
 
     @classmethod
@@ -116,9 +116,9 @@ class Merge(bunnies.Transform):
     def task_resources(self, **kwargs):
         # adjust resources based on inputs and job parameters
         return {
-            'vcpu': 4,
+            'vcpus': 4,
             'memory': 4000,
-            'timeout': -1
+            'timeout': 1*3600
         }
 
 bunnies.unmarshall.register_kind(Merge)
