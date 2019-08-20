@@ -14,7 +14,7 @@ import logging
 # experiment specific
 from snpcalling import InputFile, Align, Merge
 
-bunnies.setup_logging(logging.DEBUG)
+bunnies.setup_logging(logging.INFO)
 
 bunnies.runtime.add_user_deps(".", "snpcalling", excludes=("__pycache__"))
 bunnies.runtime.add_user_hook("import snpcalling")

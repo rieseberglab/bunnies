@@ -20,7 +20,7 @@ from . import constants
 from .config import config, active_config_files
 from . import data_import
 
-log = logging.getLogger(__package__)
+log = logging.getLogger(__name__)
 
 
 #

@@ -12,7 +12,7 @@ import botocore.waiter
 import time
 
 from botocore.exceptions import ClientError
-logger = logging.getLogger(__package__)
+logger = logging.getLogger(__name__)
 
 
 class AWSBatchSimpleJobDef(object):
