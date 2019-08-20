@@ -18,6 +18,8 @@
 PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
 BASENAME="${0##*/}"
 
+set -exo pipefail
+
 usage () {
   if [ "${#@}" -ne 0 ]; then
     echo "* ${*}"
@@ -26,15 +28,12 @@ usage () {
   cat <<ENDUSAGE
 Usage:
 
-export BATCH_FILE_TYPE="script"
-export BATCH_FILE_S3_URL="s3://my-bucket/my-script"
-${BASENAME} script-from-s3 [ <script arguments> ]
 
-  - or -
+export BUNNIES_USER_DEPS="s3://path/to/zipfile"
+export BUNNIES_TRANSFER_SCRIPT="s3://path/to/transfer-script"
+export BUNNIES_JOBID=some-job-id
+${BASENAME} [command]
 
-export BATCH_FILE_TYPE="zip"
-export BATCH_FILE_S3_URL="s3://my-bucket/my-zip"
-${BASENAME} script-from-zip [ <script arguments> ]
 ENDUSAGE
 
   exit 2
@@ -42,22 +41,22 @@ ENDUSAGE
 
 # Standard function to print an error and exit with a failing return code
 error_exit () {
-  echo "${BASENAME} - ${1}" >&2
+  echo "${BASENAME} - ${@}" >&2
   exit 1
 }
 
 # Check what environment variables are set
-if [ -z "${BATCH_FILE_TYPE}" ]; then
-  usage "BATCH_FILE_TYPE not set, unable to determine type (zip/script) of URL ${BATCH_FILE_S3_URL}"
+if [[ -z "${BUNNIES_TRANSFER_SCRIPT}" ]]; then
+    usage "BUNNIES_TRANSFER_SCRIPT not set"
 fi
 
-if [ -z "${BATCH_FILE_S3_URL}" ]; then
-  usage "BATCH_FILE_S3_URL not set. No object to download."
+if [[ -z "${BUNNIES_JOBID}" ]]; then
+    usage "BUNNIES_JOBID not set"
 fi
 
-scheme="$(echo "${BATCH_FILE_S3_URL}" | cut -d: -f1)"
-if [ "${scheme}" != "s3" ]; then
-  usage "BATCH_FILE_S3_URL must be for an S3 object; expecting URL starting with s3://"
+scheme="$(echo "${BUNNIES_TRANSFER_SCRIPT}" | cut -d: -f1)"
+if [[ "${scheme}" != "s3" ]]; then
+    usage "BUNNIES_TRANSFER_SCRIPT must be for an S3 object; expecting URL starting with s3://"
 fi
 
 # Check that necessary programs are available
@@ -65,62 +64,56 @@ which aws >/dev/null 2>&1 || error_exit "Unable to find AWS CLI executable."
 which unzip >/dev/null 2>&1 || error_exit "Unable to find unzip executable."
 
 # Create a temporary directory to hold the downloaded contents, and make sure
-# it's removed later, unless the user set KEEP_BATCH_FILE_CONTENTS.
+CLEANUP_EXTRA=()
 cleanup () {
-   if [ -z "${KEEP_BATCH_FILE_CONTENTS}" ] \
-     && [ -n "${TMPDIR}" ] \
-     && [ "${TMPDIR}" != "/" ]; then
-      rm -r "${TMPDIR}"
+   if [[ -z "${KEEP_TMP}" ]] && [[ -n "${TMPDIR}" ]] && [[ "${TMPDIR}" != "/" ]]; then
+       rm -rf --one-file-system -- "${TMPDIR}"
+   fi
+
+   if [[ -z "${KEEP_TMP}" ]] && [[ "${#CLEANUP_EXTRA[@]}" -gt 0 ]]; then
+       rm -rf --one-file-system -- "${CLEANUP_EXTRA[@]}"
    fi
 }
-trap 'cleanup' EXIT HUP INT QUIT TERM
+trap 'cleanup' EXIT
+
 # mktemp arguments are not very portable.  We make a temporary directory with
 # portable arguments, then use a consistent filename within.
-TMPDIR="$(mktemp -d -t tmp.XXXXXXXXX)" || error_exit "Failed to create temp directory."
-TMPFILE="${TMPDIR}/batch-file-temp"
+TMPTEMPLATE="${BUNNIES_JOBID}-XXXXXXX"
+TMPDIR="$(mktemp -d -t "$TMPTEMPLATE")" || error_exit "Failed to create temp directory."
+TMPFILE="${TMPDIR}/jobscript"
 install -m 0600 /dev/null "${TMPFILE}" || error_exit "Failed to create temp file."
 
 # Fetch and run a script
 fetch_and_run_script () {
   # Create a temporary file and download the script
-  aws s3 cp "${BATCH_FILE_S3_URL}" - > "${TMPFILE}" || error_exit "Failed to download S3 script."
+  aws s3 cp "${BUNNIES_TRANSFER_SCRIPT}" - > "${TMPFILE}" || error_exit "Failed to download S3 script."
 
   # Make the temporary file executable and run it with any given arguments
-  local script="./${1}"; shift
   chmod u+x "${TMPFILE}" || error_exit "Failed to chmod script."
-  exec ${TMPFILE} "${@}" || error_exit "Failed to execute script."
+
+  # Run the user script with command arguments
+  "${TMPFILE}" "${@}" || error_exit "Failed to execute script."
 }
 
 # Download a zip and run a specified script from inside
-fetch_and_run_zip () {
-  # Create a temporary file and download the zip file
-  aws s3 cp "${BATCH_FILE_S3_URL}" - > "${TMPFILE}" || error_exit "Failed to download S3 zip file from ${BATCH_FILE_S3_URL}"
+unpack_user_deps () { # s3_url targetdir
 
-  # Create a temporary directory and unpack the zip file
-  cd "${TMPDIR}" || error_exit "Unable to cd to temporary directory."
-  unzip -q "${TMPFILE}" || error_exit "Failed to unpack zip file."
+    # Create a temporary file and download the zip file
+    local tmpzip="$(mktemp -t user_deps.XXXXXXX.zip)" || error_exit "cannot create temp file for user deps archive"
+    EXTRA_CLEANUP+=( "$tmpzip" )
+    aws s3 cp "${1}" - > "$tmpzip" || error_exit "Failed to download user deps zip file from ${1}"
 
-  # Use first argument as script name and pass the rest to the script
-  local script="./${1}"; shift
-  [ -r "${script}" ] || error_exit "Did not find specified script '${script}' in zip from ${BATCH_FILE_S3_URL}"
-  chmod u+x "${script}" || error_exit "Failed to chmod script."
-  exec "${script}" "${@}" || error_exit " Failed to execute script."
+    # Create a temporary directory and unpack the zip file
+    unzip -q "$tmpzip" -d "${2}" || error_exit "Failed to unpack zip file."
 }
 
-# Main - dispatch user request to appropriate function
-case ${BATCH_FILE_TYPE} in
-  zip)
-    if [ ${#@} -eq 0 ]; then
-      usage "zip format requires at least one argument - the script to run from inside"
+if [[ -n "${BUNNIES_USER_DEPS}" ]]; then
+    unpack_user_deps "${BUNNIES_USER_DEPS}" "${TMPDIR}"
+    if [[ -z "$PYTHONPATH" ]]; then
+	export PYTHONPATH="$TMPDIR"
+    else
+	export PYTHONPATH="$PYTHONPATH:$TMPDIR"
     fi
-    fetch_and_run_zip "${@}"
-    ;;
+fi
 
-  script)
-    fetch_and_run_script "${@}"
-    ;;
-
-  *)
-    usage "Unsupported value for BATCH_FILE_TYPE. Expected (zip/script)."
-    ;;
-esac
+fetch_and_run_script
