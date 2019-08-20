@@ -10,6 +10,7 @@ import logging
 import os.path
 import botocore.waiter
 import time
+from datetime import datetime, timedelta
 
 from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
@@ -47,15 +48,109 @@ class AWSBatchSimpleJobDef(object):
 
 class AWSBatchSimpleJob(object):
     def __init__(self, name, jobdef, **overrides):
+        """
+        Overrides (optional):
+           command: [str, str, str]
+           vcpus: int
+           memory: int (MiB)
+           environment: {k:v, k:v}
+           attempts: int
+           timeout: int (seconds)
+        """
         self.name = name
-        self.jobdef = jobdef
+        if isinstance(jobdef, str):
+            self.jobdef_arn = jobdef
+        elif isinstance(jobdef, AWSBatchSimpleJobDef):
+            self.jobdef_arn = jobdef.arn
+
         self.overrides = overrides
         self.job = None
 
-    def submit(self, queue_arn):
-        self.job = submit_job(self.name, queue_arn, self.jobdef, **self.overrides)
-        return self.job
+    @classmethod
+    def from_job_id(cls, job_id):
+        client = boto3.client('batch')
+        job_desc = client.describe_jobs(
+            jobs=[job_id]
+        )['jobs'][0]
+        job_name = job_desc['jobName']
+        job_def = job_desc['jobDefinition']
+        inst = cls(job_name, job_def)
+        inst.job_id = job_id
 
+        # FIXME extract overrides: memory, vcpu, timeout, etc.
+        return inst
+
+    def submit(self, queue_arn):
+        self.job_id = submit_job(self.name, queue_arn, self.jobdef_arn, **self.overrides)['jobId']
+        return self.job_id
+
+    def get_status(self, attempt=-1):
+        """
+        {
+                    "startedAt": 1566241967286,
+                    "stoppedAt": 1566241967507,
+                    "container": {
+                        "logStreamName": "bunnies-align/default/fb360c99-f236-4dcb-b26b-a388f905763a",
+                        "networkInterfaces": [],
+                        "containerInstanceArn": "arn:aws:ecs:us-west-2:879518704116:container-instance/2bffc3ed-8bdf-4452-9297-978bdcfd572a",
+                        "exitCode": 2,
+                        "taskArn": "arn:aws:ecs:us-west-2:879518704116:task/fb360c99-f236-4dcb-b26b-a388f905763a"
+                    },
+                    "statusReason": "Essential container in task exited"
+        }
+        """
+        client = boto3.client('batch')
+        job_desc = client.describe_jobs(
+            jobs=[self.job_id]
+        )['jobs'][0]
+
+        attempt = job_desc['attempts'][attempt]
+        attempt['createdAt'] = job_desc['createdAt']
+        return attempt
+
+    def log_stream(self, attempt=-1, startTime=None, endTime=None, startFromHead=False):
+        """yields each log event of the job,
+
+           the logstream is only available when the job reaches RUNNING state.
+
+           startTime and endTime are in ms.
+        """
+        if self.job_id is None:
+            return None
+
+        client = boto3.client('batch')
+        job_desc = client.describe_jobs(
+            jobs=[self.job_id]
+        )['jobs'][0]
+
+        attempt = job_desc['attempts'][attempt]
+        container_logs = attempt['container']['logStreamName']
+        # containerInstanceArn would likely allow obtaining logs for the instance.
+
+        client = boto3.client('logs')
+        log_group_name = "/aws/batch/job"
+
+        extra = {}
+        if startTime is not None:
+            extra['startTime'] = startTime
+        if endTime is not None:
+            extra['endTime'] = endTime
+
+        extra['startFromHead'] = startFromHead
+
+        token=None
+        tokenKey = 'nextForwardToken' if startFromHead else 'nextBackwardToken'
+        events = ['_']
+        while True:
+            resp = client.get_log_events(logGroupName=log_group_name, logStreamName=container_logs,
+                                         **extra)
+            if not resp['events']:
+                return
+
+            for event in resp['events']:
+                yield event
+
+            extra["nextToken"] = resp[tokenKey]
 
 def _custom_waiters():
     if not _custom_waiters.model:
@@ -353,23 +448,23 @@ def make_jobdef(name, job_role_arn, image, vcpus=1, memory=128, mounts=None, reu
     return jd
 
 
-def submit_job(name, queue, jobdef, command=None, vcpu=None, memory=None, environment=None, attempts=1, timeout_secs=1000):
+def submit_job(name, queue, jobdef, command=None, vcpus=None, memory=None, environment=None, attempts=1, timeout=1000):
     """
     args:
       name: name of the job
       queue: queue name or arn
       jobdef: the name of the queue (name:revision) or arn
       command: [str, str, str, ...] to override the job definition command
-      vcpu: int  (overrides job def)
+      vcpus: int  (overrides job def)
       memory: int  (MiB. overrides job def)
       attempts: number of times to move the job into runnable state (1 <= n <= 10) (overrides job def)
       environment: key-value pairs. adds or redefines environment variables from job definition. keys must not start with AWS_BATCH.
     """
-    logger.info("submitting job %(name)s/%(jobdef)s to queue %(queue)s: %(vcpu)s vcpus %(memory)sMB %(command)s",
+    logger.info("submitting job %(name)s/%(jobdef)s to queue %(queue)s: %(vcpus)s vcpus %(memory)sMB %(command)s",
                 {"name": name,
                  "queue": queue,
                  "jobdef": jobdef,
-                 "vcpu": vcpu,
+                 "vcpus": vcpus,
                  "memory": memory,
                  "command": command
              })
@@ -378,8 +473,8 @@ def submit_job(name, queue, jobdef, command=None, vcpu=None, memory=None, enviro
     cont_overrides = {}
     if command is not None:
         cont_overrides['command'] = command
-    if vcpu is not None:
-        cont_overrides['vcpu'] = int(vcpu)
+    if vcpus is not None:
+        cont_overrides['vcpus'] = int(vcpus)
     if memory is not None:
         cont_overrides['memory'] = int(memory)
     if environment is not None:
@@ -395,11 +490,11 @@ def submit_job(name, queue, jobdef, command=None, vcpu=None, memory=None, enviro
     }
     if attempts is not None:
         job_settings['retryStrategy'] = {'attempts': int(attempts)}
-    if timeout_secs is not None:
-        job_settings['timeout'] = {'attemptDurationSeconds': int(timeout_secs)}
+    if timeout is not None:
+        job_settings['timeout'] = {'attemptDurationSeconds': int(timeout)}
 
     submission = client.submit_job(**job_settings)
-    logger.info("job submitted %s", submission)
+    logger.debug("job submitted %s", submission)
     return submission
 
 def describe_jobs(jobs):
@@ -415,27 +510,29 @@ def describe_jobs(jobs):
 
     return all_jobs
 
-def wait_for_completion(jobs, period=2*60):
+def wait_for_completion(jobs, interval=2*60, num_shown=5):
     """wait for the given jobs to either be SUCCEEDED, or FAILED.
-       this calls describe_jobs repeatedly
+       this calls describe_jobs repeatedly.
     """
     while True:
         desc = describe_jobs(jobs)
         status_map = {}
         incomplete = 0
         for job in desc:
-            status_map.set_default(job['status'], []).append(job['jobId'])
+            status_map.setdefault(job['status'], []).append(job['jobId'])
             if job['status'] not in ('SUCCEEDED', 'FAILED'):
                 incomplete += 1
 
-        if incomplete > 0:
-            logger.info("waiting for %d jobs to complete:", incomplete)
             for status in sorted(status_map.keys()):
-                logger.info("    %-10s: %s ...", status.lower(), status_map[status][0:5])
-            time.sleep(period)
+                logger.info("job summary:")
+                logger.info("    %-10s (%-3d): %s ...", status.lower(), len(status_map[status]), status_map[status][0:num_shown])
+        if incomplete > 0:
+            logger.info("waiting for %d jobs to complete (check interval=%ss)...", incomplete, interval)
+            time.sleep(interval)
             continue
-
-    return desc
+        # all jobs done (success/failure)
+        break
+    return status_map
 
 def _test_jobs(**kwargs):
     role = config['job_role_arn']
@@ -456,6 +553,24 @@ def _test_jobs(**kwargs):
                            ['simple-test-job.sh', '600'], 1, 128)
     print(result)
 
+def _show_job_logs(jobid, **kwargs):
+    job = AWSBatchSimpleJob.from_job_id(jobid)
+
+    def _get_time(ms):
+        return datetime.fromtimestamp(ms/1000.0).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+    for event in job.log_stream(startFromHead=True):
+        print(_get_time(event['timestamp']), event['message'])
+
+    if True:
+        status = job.get_status()
+        secs = (status.get('stoppedAt', 0) - status.get('startedAt', 0)) / 1000.0
+        from_submit = (status.get('stoppedAt', 0) - status.get('createdAt', 0)) / 1000.0
+        run_t = timedelta(seconds=secs)
+        submit_t = timedelta(seconds=from_submit)
+        print("exited with code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
+        print("runtime: %6.3fs (%s)" % (secs, str(run_t)))
+        print("total: %6.3fs (%s)" % (from_submit, str(submit_t)))
 
 def main():
     import argparse
@@ -469,6 +584,10 @@ def main():
 
     subp = subparsers.add_parser("test", help="setup entities needed for launching jobs")
 
+    subp = subparsers.add_parser("logs", help="inspect job logs")
+
+    subp.add_argument("jobid", metavar="JOBID", type=str, help="the id of the job")
+
     args = parser.parse_args(sys.argv[1:])
 
     if args.command is None:
@@ -478,7 +597,8 @@ def main():
 
     func = {
         'test': _test_jobs,
-    }.get(args.command)
+        'logs': _show_job_logs
+    }[args.command]
     retcode = func(**vars(args))
     sys.exit(int(retcode) if retcode is not None else 0)
 

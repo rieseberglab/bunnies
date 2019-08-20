@@ -339,7 +339,7 @@ class ComputeEnv(object):
         job_obj = jobs.AWSBatchSimpleJob(job_name, job_def, **job_params)
         queue_arn = self.job_queue['jobQueueArn']
         submission = job_obj.submit(queue_arn)
-        self.submissions += submission
+        self.submissions.append(submission)
 
     def get_disk(self, diskname):
         if diskname in self.disks:
@@ -644,7 +644,9 @@ runcmd:
         jobs.wait_queue_ready([self.job_queue['jobQueueArn']])
 
     def wait_for_jobs(self):
-        return jobs.wait_for_completion([sub['jobId'] for sub in self.submissions])
+        for sub in self.submissions:
+            print(repr(sub))
+        return jobs.wait_for_completion([sub for sub in self.submissions])
 
     def wait_deleted(self):
         """ensure all the entities are deleted completely"""

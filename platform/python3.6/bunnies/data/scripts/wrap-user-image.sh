@@ -89,7 +89,7 @@ dockerfile="
 FROM $imgname
 
 RUN apt-get update && \
-    apt-get -y install unzip python3-pip && \
+    apt-get -y install bash unzip python3-pip && \
     pip3 install requests boto3==1.9.35 awscli && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

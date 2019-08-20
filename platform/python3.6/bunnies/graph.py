@@ -66,9 +66,7 @@ class ExternalFile(Cacheable, Target):
 
     @classmethod
     def from_manifest(cls, doc):
-        print(doc['digests'])
-        digests = [ "%s:%v" % (k,v) for k,v in doc['digests'].items() ]
-        ef = cls(doc['url'], doc['desc'], digests=digests)
+        ef = cls(doc['url'], doc['desc'], digests=doc['digests'])
         return ef
 
     def manifest(self):

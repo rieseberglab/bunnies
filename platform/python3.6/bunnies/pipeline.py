@@ -117,7 +117,7 @@ class BuildNode(object):
                 s3_streaming_put(exec_fp, remote_script_url, content_type="text/x-python", content_length=script_len, logprefix=job_id + " ")
 
             settings = {
-                'vcpu': resources.get('vcpu', None),
+                'vcpus': resources.get('vcpus', None),
                 'memory': resources.get('memory', None),
                 'timeout': resources.get('timeout', None),
                 'environment': {
@@ -126,6 +126,8 @@ class BuildNode(object):
                     "BUNNIES_JOBID": job_id
                 }
             }
+            if settings.get('timeout', 1) <= 0:
+                settings['timeout'] = 24*3600*7 # 7 days
 
             compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
             return
@@ -318,7 +320,10 @@ class BuildGraph(object):
         # FIXME repeatedly submit the current set of all jobs whose dependencies are satisfied
         for job in self.build_order():
             job.schedule(compute_env)
-            compute_env.wait_for_jobs()
+            statuses = compute_env.wait_for_jobs()
+            failed_jobs = statuses.get('FAILED', [])
+            if failed_jobs:
+                raise exc.BuildException("One or more jobs failed to build.")
 
 def build_target(roots):
     """
