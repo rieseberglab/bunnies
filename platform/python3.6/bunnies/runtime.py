@@ -116,7 +116,7 @@ def upload_user_context(output_prefix):
 
                 # include platform python code and dependencies
                 for tozip in walk_tree(package_tmpdir,
-                                       excludes=(".metadata.json", tmpfd.name, "__pycache__"),
+                                       excludes=(".metadata.json", os.path.basename(tmpfd.name), "__pycache__"),
                                        exclude_patterns=("*~",)):
                     relname = os.path.relpath(tozip, package_tmpdir)
                     zipfd.write(tozip, arcname=relname)
