@@ -5,12 +5,8 @@
 """
 from . import runtime
 from . import exc
-from . import jobs
 from .graph import Cacheable, Transform, Target
-from .utils import canonical_hash
 from .environment import ComputeEnv
-from .constants import PLATFORM
-from .containers import wrap_user_image
 from .transfers import s3_streaming_put
 from .config import config
 
@@ -19,6 +15,7 @@ import logging
 import io
 
 log = logging.getLogger(__name__)
+
 
 class PipelineException(Exception):
     pass
@@ -111,7 +108,7 @@ class BuildNode(object):
             user_deps_url = runtime.upload_user_context(user_deps_prefix)
 
             with io.BytesIO() as exec_fp:
-                script_len = exec_fp.write(self.execution_transfer_script().encode('utf-8'))
+                script_len = exec_fp.write(self.execution_transfer_script(resources).encode('utf-8'))
                 exec_fp.seek(0)
                 log.debug("uploading job script for job_id %s at %s ...", job_id, remote_script_url)
                 s3_streaming_put(exec_fp, remote_script_url, content_type="text/x-python", content_length=script_len, logprefix=job_id + " ")
@@ -133,9 +130,9 @@ class BuildNode(object):
             return
         raise NotImplemented("cannot schedule non-Transform objects")
 
-    def execution_transfer_script(self):
+    def execution_transfer_script(self, resources):
         """
-        Create a self-standing script that executes just the one node
+        Create a self-standing script that executes just the one node.
         """
 
         # fixme -- json is an inefficient pickle.
@@ -144,6 +141,7 @@ class BuildNode(object):
         #
         manifest_s = repr(json.dumps(self.data.manifest()))
         canonical_s = repr(json.dumps(self.data.canonical()))
+        resources_s = repr(json.dumps(resources))
 
         hooks = "\n".join(runtime.add_user_hook._hooks)
 
@@ -176,8 +174,9 @@ log.info("%%s", json.dumps(manifest_obj, indent=4))
 
 params = {
         'workdir': os.environ.get('BUNNIES_WORKDIR'),
-        'scriptdir': os.path.dirname(__file__)
-        'job_id': os.environ.get('BUNNIES_JOBID'),
+        'scriptdir': os.path.dirname(__file__),
+        'job_id': os.environ.get('BUNNIES_JOBID')
+        'resources': %(resources_s)
         }
 
 output = transform.run(**params)
@@ -205,7 +204,8 @@ bunnies.runtime.update_result(result_path, output=output, manifest=manifest_obj,
     'manifest_s': manifest_s,
     'canonical_s': canonical_s,
     'uid_s': repr(self.uid),
-    'hooks': hooks
+    'hooks': hooks,
+    'resources_s': resources_s
 }
 
 

@@ -21,5 +21,5 @@ from .graph import S3Blob, Transform, ExternalFile
 from .pipeline import build_target
 from .data_import import DataImport
 from .environment import ComputeEnv
-
+from .utils import run_cmd
 from .logging_ import setup_logging

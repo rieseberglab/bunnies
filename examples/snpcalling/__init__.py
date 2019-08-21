@@ -2,6 +2,7 @@
 
 import bunnies
 import bunnies.unmarshall
+import os
 
 
 def InputFile(url, desc="", digests=None):
@@ -83,6 +84,54 @@ class Align(bunnies.Transform):
             'bam': None,
             'bai': None
         }
+
+        s3_output_prefix = self.output_prefix()
+        local_output_dir = os.path.join(workdir, "output")
+
+        cas_dir = "/scratch/cas"
+        os.makedirs(cas_dir)
+        os.makedirs(local_output_dir)
+
+        align_args = [
+            "time",
+            "align",
+            "-cas", cas_dir
+        ]
+        if self.params['lossy']:
+            align_args += ["-lossy"]
+
+        jobfile_doc = {
+            self.params['sample_name']: {
+                "name": self.params['sample_name'],
+                "locations": [
+        num_threads = params['resources']['vcpus']
+        align_args += [
+            "-r", self.ref.url(),
+            "-i", JOBFILE,
+            "-o", s3_output_prefix,
+            "-n", str(num_threads),
+            "-w", workdir
+        ]
+
+        bunnies.run_cmd(
+            show_out=True, cwd=workdir)
+
+
+        time {params.align_bin} \
+	  "\\${{cas_args[@]}}" \
+	  -r file:{input.reference} \
+	  -i file:{input.jobfile} \
+	  -x file:{input.exclusion} \
+	  -o file:\\$OUTDIR \
+          -n {threads} \
+          -w \\${{workdir}} \
+          -sb \
+          -m \
+          -creds {params.credsfile} \
+	  -lossy \
+          -d 1
+        """
+
         self.add_named_output("bam", self.sample_name + ".bam")
         self.add_named_output("bai", self.sample_name + ".bai")
 

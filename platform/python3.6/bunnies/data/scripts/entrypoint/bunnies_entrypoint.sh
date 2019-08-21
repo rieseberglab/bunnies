@@ -93,19 +93,18 @@ fetch_and_run_script () {
   chmod u+x "${TMPFILE}" || error_exit "Failed to chmod script."
 
   : creating workdir
-  export BUNNIES_WORKDIR="/scratch/${BUNNIES_JOBID}/"
-  mkdir -p "${BUNNIES_WORKDIR}"
+  BUNNIES_WORKDIR=$(mktemp -d -p "/scratch/" "${BUNNIES_JOBID}-XXXXX")
+  CLEANUP_EXTRA+=("${BUNNIES_WORKDIR}")
+  export BUNNIES_WORKDIR
 
-  : space available
+  : logging space available
   df -h
 
-  : environment dump
+  : logging environment
   env
 
   (
-      cd "${BUNNIES_WORKDIR}"
-      # Run the user script with command arguments
-      "${TMPFILE}" "${@}" || error_exit "Failed to execute script."
+      cd "${BUNNIES_WORKDIR}" && "${TMPFILE}" "${@}"
   )
 }
 
@@ -119,7 +118,7 @@ unpack_user_deps () { # s3_url targetdir
     aws s3 cp "${1}" - > "$tmpzip" || error_exit "Failed to download user deps zip file from ${1}"
 
     # Create a temporary directory and unpack the zip file
-    unzip "$tmpzip" -d "${2}" || error_exit "Failed to unpack zip file."
+    unzip "$tmpzip" -q -d "${2}" || error_exit "Failed to unpack zip file."
 }
 
 if [[ -n "${BUNNIES_USER_DEPS}" ]]; then
