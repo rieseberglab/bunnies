@@ -83,6 +83,7 @@ TMPDIR="$(mktemp -d -t "$TMPTEMPLATE")" || error_exit "Failed to create temp dir
 TMPFILE="${TMPDIR}/jobscript"
 install -m 0600 /dev/null "${TMPFILE}" || error_exit "Failed to create temp file."
 
+
 # Fetch and run a script
 fetch_and_run_script () {
   # Create a temporary file and download the script
@@ -91,9 +92,23 @@ fetch_and_run_script () {
   # Make the temporary file executable and run it with any given arguments
   chmod u+x "${TMPFILE}" || error_exit "Failed to chmod script."
 
-  # Run the user script with command arguments
-  "${TMPFILE}" "${@}" || error_exit "Failed to execute script."
+  : creating workdir
+  export BUNNIES_WORKDIR="/scratch/${BUNNIES_JOBID}/"
+  mkdir -p "${BUNNIES_WORKDIR}"
+
+  : space available
+  df -h
+
+  : environment dump
+  env
+
+  (
+      cd "${BUNNIES_WORKDIR}"
+      # Run the user script with command arguments
+      "${TMPFILE}" "${@}" || error_exit "Failed to execute script."
+  )
 }
+
 
 # Download a zip and run a specified script from inside
 unpack_user_deps () { # s3_url targetdir
@@ -104,7 +119,7 @@ unpack_user_deps () { # s3_url targetdir
     aws s3 cp "${1}" - > "$tmpzip" || error_exit "Failed to download user deps zip file from ${1}"
 
     # Create a temporary directory and unpack the zip file
-    unzip -q "$tmpzip" -d "${2}" || error_exit "Failed to unpack zip file."
+    unzip "$tmpzip" -d "${2}" || error_exit "Failed to unpack zip file."
 }
 
 if [[ -n "${BUNNIES_USER_DEPS}" ]]; then

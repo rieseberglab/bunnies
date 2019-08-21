@@ -123,7 +123,7 @@ class BuildNode(object):
                 'environment': {
                     "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                     "BUNNIES_USER_DEPS": user_deps_url,
-                    "BUNNIES_JOBID": job_id
+                    "BUNNIES_JOBID": job_id,
                 }
             }
             if settings.get('timeout', 1) <= 0:
@@ -151,7 +151,7 @@ class BuildNode(object):
 import bunnies.runtime
 import bunnies.constants as C
 from bunnies.unmarshall import unmarshall
-import os.path
+import os, os.path
 import json
 import logging
 log = logging.getLogger()
@@ -172,11 +172,34 @@ canonical_obj = json.loads(canonical_s)
 bunnies.setup_logging()
 
 transform = unmarshall(manifest_obj)
-log.info("%%s", json.dump(manifest_obj, indent=4))
-output = transform.run()
+log.info("%%s", json.dumps(manifest_obj, indent=4))
+
+params = {
+        'workdir': os.environ.get('BUNNIES_WORKDIR'),
+        'scriptdir': os.path.dirname(__file__)
+        'job_id': os.environ.get('BUNNIES_JOBID'),
+        }
+
+output = transform.run(**params)
 
 result_path = os.path.join(transform.output_prefix(), C.TRANSFORM_RESULT_FILE)
 bunnies.runtime.update_result(result_path, output=output, manifest=manifest_obj, canonical=canonical_obj)
+
+#
+# result file -- if this file exists, the transform has completed successfully
+# and _all_ of its outputs have been successfully saved)
+#
+# {
+#   'manifest': {...},
+    'canonical': {...},
+#   'output': {
+#        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
+#   },
+#   'log': ["url to raw log file"]
+#   'usage': "url to resource usage statistics file"
+# }
+#
+#TRANSFORM_RESULT_FILE = "transform-result.json"
 
 """ % {
     'manifest_s': manifest_s,

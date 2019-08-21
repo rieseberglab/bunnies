@@ -3,6 +3,7 @@
 import bunnies
 import bunnies.unmarshall
 
+
 def InputFile(url, desc="", digests=None):
     """
     Factory method to wrap various file URL forms into a Bunnies file
@@ -24,8 +25,18 @@ class Align(bunnies.Transform):
 
     kind = "snpcalling.Align"
 
-    def __init__(self, sample_name=None, r1=None, r2=None, ref=None, ref_idx=None):
-        super().__init__("align", version=self.VERSION, image=self.ALIGN_IMAGE)
+    def __init__(self, sample_name=None, r1=None, r2=None, ref=None, ref_idx=None, lossy=False, manifest=None):
+        super().__init__("align", version=self.VERSION, image=self.ALIGN_IMAGE, manifest=manifest)
+
+        if manifest is not None:
+            inputs, params = manifest['inputs'], manifest['params']
+            r1 = inputs['r1'].node
+            r2 = inputs['r2'].node
+            ref = inputs['ref'].node,
+            ref_idx = inputs['ref_idx'].node
+
+            lossy = params['lossy']
+            sample_name = params['sample_name']
 
         if None in (sample_name, r1, ref, ref_idx):
             raise Exception("invalid parameters for alignment")
@@ -40,8 +51,7 @@ class Align(bunnies.Transform):
         self.add_input("r2", r2,    desc="fastq reverse reads")
         self.add_input("ref", ref,  desc="reference fasta")
         self.add_input("ref_idx", ref_idx, desc="reference index")
-
-        self.params["lossy"] = False
+        self.params["lossy"] = bool(lossy)
         self.params["sample_name"] = sample_name
 
     @classmethod
@@ -64,11 +74,15 @@ class Align(bunnies.Transform):
         }
 
     @classmethod
-    def run(self):
+    def run(self, **params):
         """ this runs in the image """
         workdir = params['workdir']
         outputdir = params['outdir']
 
+        outputs = {
+            'bam': None,
+            'bai': None
+        }
         self.add_named_output("bam", self.sample_name + ".bam")
         self.add_named_output("bai", self.sample_name + ".bai")
 
@@ -77,6 +91,7 @@ class Align(bunnies.Transform):
         print("inputs: %s", inputs)
         print("outputs: %s", outputs)
         print("kwargs: %s", kwargs)
+        return outputs
 
 bunnies.unmarshall.register_kind(Align)
 
@@ -92,15 +107,28 @@ class Merge(bunnies.Transform):
     __slots__ = ("sample_name",)
     kind = "snpcalling.Merge"
 
-    def __init__(self, sample_name, aligned_bams):
+    def __init__(self, sample_name=None, aligned_bams=None, manifest=None):
         super().__init__("merge", version=self.VERSION, image=self.MERGE_IMAGE)
+
+        if manifest is not None:
+            inputs, params = manifest.get('inputs', 'params')
+            sample_name = params.get('sample_name')
+            aligned_bams = []
+            for i in range(0, params.get('num_bams')):
+                aligned_bams.append(inputs.get(str(i)).node)
+
         self.sample_name = sample_name
         self.params["sample_name"] = sample_name
+        self.params["num_bams"] = len(aligned_bams)
+
         if not aligned_bams:
-            raise Exception("merging requires 1 or more inputs")
+            raise ValueError("merging requires 1 or more aligned bam inputs")
+        if not sample_name:
+            raise ValueError("you must specify the sample name to write")
+
         for i, bam in enumerate(aligned_bams):
-            #print(self.sample_name, bam)
-            self.add_input(i, bam, desc="aligned input #%d" % (i,))
+            # print(self.sample_name, bam)
+            self.add_input(str(i), bam, desc="aligned input #%d" % (i,))
 
     @classmethod
     def task_template(cls, compute_env):

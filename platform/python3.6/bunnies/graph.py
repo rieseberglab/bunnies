@@ -9,6 +9,7 @@ from . import config
 from .exc import NotImpl, NoSuchFile
 from . import unmarshall
 
+
 class Cacheable(object):
     """a cacheable resource, canonically named according to its contents or provenance"""
     __slots__ = ()
@@ -31,6 +32,7 @@ class Cacheable(object):
         """
         canon_doc = self.canonical()
         return utils.canonical_hash(canon_doc)
+
 
 class Target(object):
     """target is a collection of one or more resources that can be generated and retrieved"""
@@ -196,6 +198,7 @@ class Input(Cacheable):
 
 unmarshall.register_kind(Input)
 
+
 class Transform(Target, Cacheable):
     """
     A transformation of inputs performed by a program, with the given parameters
@@ -249,7 +252,19 @@ class Transform(Target, Cacheable):
 
     @classmethod
     def from_manifest(cls, doc):
-        return cls(**doc)
+        if doc['type'] != "transform":
+            raise ValueError("expected type transform, but got %s" % (doc['type'],))
+
+        inst = cls(manifest=doc)
+
+        if inst.image != doc['image'] or inst.version != doc['version']:
+            raise ValueError("expected manifest image anv version: %s %s, but got %s %s" %
+                             (inst.image, inst.version, doc['image'], doc['version']))
+
+        if inst.name != doc['name']:
+            raise ValueError("expected transform name %s, but got %s" % (inst.name, doc['name']))
+
+        return inst
 
     def canonical(self):
         """Returns the minimal amount of information for naming the object completely and unambiguously. If two different
@@ -263,7 +278,8 @@ class Transform(Target, Cacheable):
         """
         obj = {
             'type': "transform",
-            'name': self.name, 'version': self.version,
+            'name': self.name,
+            'version': self.version,
             'image': self.image,
             'params': self.params,
             'inputs': {k: self.inputs[k].canonical() for k in self.inputs}
@@ -296,7 +312,7 @@ class Transform(Target, Cacheable):
                     'cid': canonical_id,
                     'result': constants.TRANSFORM_RESULT_FILE
                 }
-                meta = utils.get_blob_meta(candidate, logprefix=self.kind)
+                _ = utils.get_blob_meta(candidate, logprefix=self.kind)
                 return candidate
             except NoSuchFile:
                 pass
