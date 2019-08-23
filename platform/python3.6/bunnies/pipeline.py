@@ -175,8 +175,8 @@ log.info("%%s", json.dumps(manifest_obj, indent=4))
 params = {
         'workdir': os.environ.get('BUNNIES_WORKDIR'),
         'scriptdir': os.path.dirname(__file__),
-        'job_id': os.environ.get('BUNNIES_JOBID')
-        'resources': %(resources_s)
+        'job_id': os.environ.get('BUNNIES_JOBID'),
+        'resources': %(resources_s)s
         }
 
 output = transform.run(**params)
@@ -190,7 +190,7 @@ bunnies.runtime.update_result(result_path, output=output, manifest=manifest_obj,
 #
 # {
 #   'manifest': {...},
-    'canonical': {...},
+#   'canonical': {...},
 #   'output': {
 #        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
 #   },

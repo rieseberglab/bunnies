@@ -103,6 +103,10 @@ fetch_and_run_script () {
   : logging environment
   env
 
+  : logging container metadata
+  curl -v -o - "${ECS_CONTAINER_METADATA_URI}" || :
+  echo # flush line
+
   (
       cd "${BUNNIES_WORKDIR}" && "${TMPFILE}" "${@}"
   )
@@ -118,7 +122,7 @@ unpack_user_deps () { # s3_url targetdir
     aws s3 cp "${1}" - > "$tmpzip" || error_exit "Failed to download user deps zip file from ${1}"
 
     # Create a temporary directory and unpack the zip file
-    unzip "$tmpzip" -q -d "${2}" || error_exit "Failed to unpack zip file."
+    unzip -q -d "${2}" "$tmpzip" || error_exit "Failed to unpack zip file."
 }
 
 if [[ -n "${BUNNIES_USER_DEPS}" ]]; then

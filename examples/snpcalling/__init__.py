@@ -3,7 +3,9 @@
 import bunnies
 import bunnies.unmarshall
 import os
+import logging
 
+log = logging.getLogger(__package__)
 
 def InputFile(url, desc="", digests=None):
     """
@@ -33,7 +35,7 @@ class Align(bunnies.Transform):
             inputs, params = manifest['inputs'], manifest['params']
             r1 = inputs['r1'].node
             r2 = inputs['r2'].node
-            ref = inputs['ref'].node,
+            ref = inputs['ref'].node
             ref_idx = inputs['ref_idx'].node
 
             lossy = params['lossy']
@@ -74,16 +76,13 @@ class Align(bunnies.Transform):
             'timeout': 4*3600
         }
 
-    @classmethod
     def run(self, **params):
         """ this runs in the image """
-        workdir = params['workdir']
-        outputdir = params['outdir']
 
-        outputs = {
-            'bam': None,
-            'bai': None
-        }
+        import tempfile
+        import json
+
+        workdir = params['workdir']
 
         s3_output_prefix = self.output_prefix()
         local_output_dir = os.path.join(workdir, "output")
@@ -91,6 +90,34 @@ class Align(bunnies.Transform):
         cas_dir = "/scratch/cas"
         os.makedirs(cas_dir)
         os.makedirs(local_output_dir)
+
+        def cached_remote_file(url, md5_digest, casdir):
+            is_cached = bunnies.run_cmd([
+                "cas", "-get", "md5:" + md5_digest, casdir
+            ]).output
+
+            if is_cached:
+                return is_cached
+
+            if not is_cached:
+                log.info("caching url %s into %s", url, casdir)
+                new_hash = bunnies.run_cmd(["cas", "-put", url, casdir], show_out=True)
+
+            return bunnies.run_cmd([
+                "cas", "-get", "md5:" + md5_digest
+            ]).output
+
+        # download reference in /scratch
+        ref_target = self.ref.ls()
+        ref_idx_target = self.ref_idx.ls()
+        cached_ref = cached_remote_file(ref_target['url'], ref_target['digests']['md5'], cas_dir)
+        cached_ref_idx = cached_remote_file(ref_idx_target['url'], ref_idx_target['digests']['md5'], cas_dir)
+
+
+        # get credentials
+        bunnies.run_cmd([
+            "curl", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+        ], show_out=True)
 
         align_args = [
             "time",
@@ -100,46 +127,34 @@ class Align(bunnies.Transform):
         if self.params['lossy']:
             align_args += ["-lossy"]
 
+        r1_target = self.r1.ls()
+        r2_target = self.r1.ls()
+
         jobfile_doc = {
             self.params['sample_name']: {
                 "name": self.params['sample_name'],
                 "locations": [
+                    [r1_target['url'], r1_target['digests']['md5']],
+                    [r2_target['url'], r2_target['digests']['md5']]
+                ]
+            }
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".job.txt", prefix=self.params['sample_name'], dir=workdir, delete=False) as jobfile_fd:
+            json.dump(jobfile_doc, jobfile_fd)
+
         num_threads = params['resources']['vcpus']
         align_args += [
             "-r", self.ref.url(),
-            "-i", JOBFILE,
+            "-i", jobfile_fd.name,
             "-o", s3_output_prefix,
             "-n", str(num_threads),
-            "-w", workdir
+            "-w", workdir,
+            "-m",
+            "-d", "1"
         ]
 
-        bunnies.run_cmd(
-            show_out=True, cwd=workdir)
-
-
-        time {params.align_bin} \
-	  "\\${{cas_args[@]}}" \
-	  -r file:{input.reference} \
-	  -i file:{input.jobfile} \
-	  -x file:{input.exclusion} \
-	  -o file:\\$OUTDIR \
-          -n {threads} \
-          -w \\${{workdir}} \
-          -sb \
-          -m \
-          -creds {params.credsfile} \
-	  -lossy \
-          -d 1
-        """
-
-        self.add_named_output("bam", self.sample_name + ".bam")
-        self.add_named_output("bai", self.sample_name + ".bai")
-
-        print("runtime: %s", runtime)
-        print("params: %s", params)
-        print("inputs: %s", inputs)
-        print("outputs: %s", outputs)
-        print("kwargs: %s", kwargs)
+        bunnies.run_cmd(align_args, show_out=True, cwd=workdir)
         return outputs
 
 bunnies.unmarshall.register_kind(Align)
@@ -160,7 +175,7 @@ class Merge(bunnies.Transform):
         super().__init__("merge", version=self.VERSION, image=self.MERGE_IMAGE)
 
         if manifest is not None:
-            inputs, params = manifest.get('inputs', 'params')
+            inputs, params = manifest['inputs'], manifest['params']
             sample_name = params.get('sample_name')
             aligned_bams = []
             for i in range(0, params.get('num_bams')):

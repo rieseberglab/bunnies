@@ -59,16 +59,21 @@ class ExternalFile(Cacheable, Target):
 
     kind = "bunnies.ExternalFile"
 
-    def __init__(self, url, desc=None, digests=None):
+    def __init__(self, url, desc=None, digests=None, size=-1):
         self.url = url
         self.desc = desc
         self.digests = utils.parse_digests(digests) if digests else {}
+        if 'md5' not in self.digests:
+            raise ValueError("md5 needed.")
+        self.size = size
+        if self.size < 0:
+            self.size = -1
         if not self.digests:
             raise Exception("at least one expected digest must be specified for external files")
 
     @classmethod
     def from_manifest(cls, doc):
-        ef = cls(doc['url'], doc['desc'], digests=doc['digests'])
+        ef = cls(doc['url'], doc['desc'], digests=doc['digests'], size=doc['size'])
         return ef
 
     def manifest(self):
@@ -76,7 +81,8 @@ class ExternalFile(Cacheable, Target):
             constants.MANIFEST_KIND_ATTR: self.kind, # fixme meta class?
             'url': self.url,
             'desc': self.desc,
-            'digests': self.digests
+            'digests': self.digests,
+            'size': self.size
         }
 
     def canonical(self):
@@ -94,9 +100,11 @@ class ExternalFile(Cacheable, Target):
         }
 
     def exists(self):
-        """External files are assumed to exist before the pipeline starts
         """
-        return True
+        Whether the external file is readily available.
+        External files typically will exist already before the pipeline starts.
+        """
+        return self.url
 
     def ls(self):
         return {
@@ -130,13 +138,12 @@ class S3Blob(Cacheable, Target):
             head_digests = {key[len(pfx):]: val for key, val in meta['Metadata'].items()
                             if key.startswith(pfx)}
 
-            # FIXME let strategy pick appropriate name
-            hexdigest = head_digests['md5']
-            self._manifest = {constants.MANIFEST_KIND_ATTR: self.kind, # fixme meta class?
+            _ = head_digests['md5']
+            self._manifest = {constants.MANIFEST_KIND_ATTR: self.kind,  # FIXME meta class
                               "desc": self.desc,
                               "url": self.url,
-                              "md5": hexdigest,
-                              "len": meta['ContentLength']}
+                              "digests": head_digests,
+                              "size": meta['ContentLength']}
         return self._manifest
 
     @classmethod
@@ -151,7 +158,7 @@ class S3Blob(Cacheable, Target):
         # exclude length
         return {
             'type': 'blob',
-            'md5': manifest['md5']
+            'md5': manifest['digests']['md5']
         }
 
     def exists(self):

@@ -194,6 +194,7 @@ def hex2b64(hexstr):
     hexbits = bytes([(int(hexstr[i], 16) << 4) + int(hexstr[i+1], 16) for i in range(0, len(hexstr), 2)])
     return base64.b64encode(hexbits).decode('ascii')
 
+
 def walk_tree(rootdir, excludes=(), exclude_patterns=()):
     """
     yield files under rootdir, recursively, including empty folders, but
@@ -223,7 +224,7 @@ def walk_tree(rootdir, excludes=(), exclude_patterns=()):
 
 
 def run_cmd(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, log_on_err=True,
-        show_out=False, cwd=None, log_cmd=True, **kwargs):
+            show_out=False, cwd=None, log_cmd=True, **kwargs):
     """run a command -- wrapper around subprocess """
 
     if cwd and cwd != ".":
