@@ -460,14 +460,14 @@ def submit_job(name, queue, jobdef, command=None, vcpus=None, memory=None, envir
       attempts: number of times to move the job into runnable state (1 <= n <= 10) (overrides job def)
       environment: key-value pairs. adds or redefines environment variables from job definition. keys must not start with AWS_BATCH.
     """
-    logger.info("submitting job %(name)s/%(jobdef)s to queue %(queue)s: %(vcpus)s vcpus %(memory)sMB %(command)s",
+    logger.info("submitting job %(name)s/%(jobdef)s to queue=%(queue)s vcpus=%(vcpus)s mem=%(memory)sMiB cmd=%(command)s",
                 {"name": name,
                  "queue": queue,
                  "jobdef": jobdef,
                  "vcpus": vcpus,
                  "memory": memory,
                  "command": command
-             })
+                })
     client = boto3.client('batch')
 
     cont_overrides = {}
