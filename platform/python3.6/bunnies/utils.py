@@ -225,7 +225,17 @@ def walk_tree(rootdir, excludes=(), exclude_patterns=()):
 
 def run_cmd(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, log_on_err=True,
             show_out=False, cwd=None, log_cmd=True, **kwargs):
-    """run a command -- wrapper around subprocess """
+    """run a command -- wrapper around subprocess. returns the process object.
+
+       check: True        throw an error if the subprocess fails. use the returncode attribute
+                          to inspect the code when set to False.
+       log_on_err: True   if the subprocess fails and the stdout/stderr are set to PIPE, then
+                          the stdout and stderr contents are printed to the logs
+       show_out: False    if the process exits successfully, and stdout is set to PIPE, then
+                          log contents of stdout.
+
+       the rest of the arguments are passed directly to subprocess.run
+    """
 
     if cwd and cwd != ".":
         if log_cmd:
