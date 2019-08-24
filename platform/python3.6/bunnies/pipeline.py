@@ -17,6 +17,17 @@ import io
 log = logging.getLogger(__name__)
 
 
+def _get_default_region():
+    if not _get_default_region.cached:
+        import boto3
+        sess = boto3.Session()
+        _get_default_region.cached = sess.region_name
+    return _get_default_region.cached
+
+
+_get_default_region.cached = None
+
+
 class PipelineException(Exception):
     pass
 
@@ -141,7 +152,10 @@ class BuildNode(object):
         #
         manifest_s = repr(json.dumps(self.data.manifest()))
         canonical_s = repr(json.dumps(self.data.canonical()))
-        resources_s = repr(json.dumps(resources))
+        resources_s = repr(resources)
+
+        # this doesn't get carried on the other side
+        default_region = _get_default_region()
 
         hooks = "\n".join(runtime.add_user_hook._hooks)
 
@@ -165,9 +179,12 @@ canonical_s = %(canonical_s)s
 manifest_s  = %(manifest_s)s
 
 manifest_obj = json.loads(manifest_s)
+
 canonical_obj = json.loads(canonical_s)
 
 bunnies.setup_logging()
+
+os.environ['AWS_REGION'] = %(default_region)s
 
 transform = unmarshall(manifest_obj)
 log.info("%%s", json.dumps(manifest_obj, indent=4))
@@ -203,6 +220,7 @@ bunnies.runtime.update_result(result_path, output=output, manifest=manifest_obj,
 """ % {
     'manifest_s': manifest_s,
     'canonical_s': canonical_s,
+    'default_region': repr(default_region),
     'uid_s': repr(self.uid),
     'hooks': hooks,
     'resources_s': resources_s
