@@ -18,8 +18,6 @@
 PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
 BASENAME="${0##*/}"
 
-set -exo pipefail
-
 usage () {
   if [ "${#@}" -ne 0 ]; then
     echo "* ${*}"
@@ -44,6 +42,12 @@ error_exit () {
   echo "${BASENAME} - ${@}" >&2
   exit 1
 }
+
+set -exo pipefail
+
+:
+: BUNNIES ENTRYPOINT
+:
 
 # Check what environment variables are set
 if [[ -z "${BUNNIES_TRANSFER_SCRIPT}" ]]; then
@@ -97,17 +101,18 @@ fetch_and_run_script () {
   CLEANUP_EXTRA+=("${BUNNIES_WORKDIR}")
   export BUNNIES_WORKDIR
 
-  : logging space available
+  : space available
   df -h
 
-  : logging environment
+  : environment
   env
 
-  : logging container metadata
-  curl -v -o - "${ECS_CONTAINER_METADATA_URI}" || :
+  : container metadata
+  curl -sv -o - "${ECS_CONTAINER_METADATA_URI}" || :
   echo # flush line
 
   (
+      : STARTING SCRIPT
       cd "${BUNNIES_WORKDIR}" && "${TMPFILE}" "${@}"
   )
 }
