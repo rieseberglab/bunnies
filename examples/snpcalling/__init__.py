@@ -21,7 +21,7 @@ class Align(bunnies.Transform):
     """
     Align a paired-end fastq or sra file against a reference genome
     """
-    ALIGN_IMAGE = "rieseberglab/analytics:5-2.3.2"
+    ALIGN_IMAGE = "rieseberglab/analytics:5-2.4.0"
     VERSION = "1"
 
     __slots__ = ("sample_name", "r1", "r2", "ref", "ref_idx")
@@ -82,42 +82,30 @@ class Align(bunnies.Transform):
         import tempfile
         import json
 
+        def cache_remote_file(url, md5_digest, casdir):
+            return bunnies.run_cmd([
+                "cas", "-put", url, "-get", "md5:" + md5_digest, casdir
+            ]).stdout.decode('utf-8').strip()
+
         workdir = params['workdir']
 
         s3_output_prefix = self.output_prefix()
         local_output_dir = os.path.join(workdir, "output")
 
         cas_dir = "/scratch/cas"
-        os.makedirs(cas_dir)
-        os.makedirs(local_output_dir)
+        os.makedirs(cas_dir, exist_ok=True)
+        os.makedirs(local_output_dir, exist_ok=True)
 
-        def cached_remote_file(url, md5_digest, casdir):
-            is_cached = bunnies.run_cmd([
-                "cas", "-get", "md5:" + md5_digest, casdir
-            ]).output
-
-            if is_cached:
-                return is_cached
-
-            if not is_cached:
-                log.info("caching url %s into %s", url, casdir)
-                new_hash = bunnies.run_cmd(["cas", "-put", url, casdir], show_out=True)
-
-            return bunnies.run_cmd([
-                "cas", "-get", "md5:" + md5_digest
-            ]).output
+        # log credentials
+        bunnies.run_cmd([
+            "curl", "-sv", "-o", "-", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+        ], show_out=True)
 
         # download reference in /scratch
         ref_target = self.ref.ls()
         ref_idx_target = self.ref_idx.ls()
-        cached_ref = cached_remote_file(ref_target['url'], ref_target['digests']['md5'], cas_dir)
-        cached_ref_idx = cached_remote_file(ref_idx_target['url'], ref_idx_target['digests']['md5'], cas_dir)
-
-
-        # get credentials
-        bunnies.run_cmd([
-            "curl", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
-        ], show_out=True)
+        ref_path = cache_remote_file(ref_target['url'], ref_target['digests']['md5'], cas_dir)
+        ref_idx_path = cache_remote_file(ref_idx_target['url'], ref_idx_target['digests']['md5'], cas_dir)
 
         align_args = [
             "time",
@@ -140,7 +128,8 @@ class Align(bunnies.Transform):
             }
         }
 
-        with tempfile.NamedTemporaryFile(suffix=".job.txt", prefix=self.params['sample_name'], dir=workdir, delete=False) as jobfile_fd:
+        with tempfile.NamedTemporaryFile(suffix=".job.txt", mode="wt",
+                                         prefix=self.params['sample_name'], dir=workdir, delete=False) as jobfile_fd:
             json.dump(jobfile_doc, jobfile_fd)
 
         num_threads = params['resources']['vcpus']
@@ -165,7 +154,7 @@ class Merge(bunnies.Transform):
     merge one or more bam files and modify the readgroup with the
     provided information. bams are merged in the order provided.
     """
-    MERGE_IMAGE = "rieseberglab/analytics:5-2.3.2"
+    MERGE_IMAGE = "rieseberglab/analytics:5-2.4.0"
     VERSION = "1"
 
     __slots__ = ("sample_name",)
