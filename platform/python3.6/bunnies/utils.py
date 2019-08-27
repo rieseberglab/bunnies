@@ -239,10 +239,10 @@ def run_cmd(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, lo
 
     if cwd and cwd != ".":
         if log_cmd:
-            logger.debug("+CMD (cwd %s) %s", cwd, " ".join([repr(x) for x in args]))
+            logger.info("+CMD (cwd %s) %s", cwd, " ".join([repr(x) for x in args]))
     else:
         if log_cmd:
-            logger.debug("+CMD %s", " ".join([repr(x) for x in args]))
+            logger.info("+CMD %s", " ".join([repr(x) for x in args]))
 
     proc = subprocess.run(args, stdout=stdout, stderr=stderr, check=False, cwd=cwd, **kwargs)
     if proc.returncode != 0 and log_on_err:
@@ -255,7 +255,7 @@ def run_cmd(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, lo
                 logger.error("err: %s", line)
     if proc.returncode == 0 and show_out and stdout == subprocess.PIPE:
         for line in proc.stdout.decode('utf-8').splitlines():
-            logger.error("out: %s", line)
+            logger.info("out: %s", line)
 
     if check:
         proc.check_returncode()

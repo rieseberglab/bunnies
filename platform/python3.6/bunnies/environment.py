@@ -11,7 +11,6 @@ import base64
 import boto3
 import botocore
 import botocore.waiter
-import re
 
 from botocore.exceptions import ClientError
 
@@ -19,7 +18,6 @@ from .config import config
 from . import constants
 from .utils import data_files
 from . import jobs
-from .constants import PLATFORM
 
 logger = logging.getLogger(__package__)
 

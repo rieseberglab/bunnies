@@ -3,9 +3,22 @@
 import bunnies
 import bunnies.unmarshall
 import os
+import sys
 import logging
 
 log = logging.getLogger(__package__)
+
+
+def setup_logging(loglevel=logging.INFO):
+    """configure custom logging for the platform"""
+    root = logging.getLogger(__package__)
+    root.setLevel(loglevel)
+    ch = logging.StreamHandler(sys.stderr)
+    ch.setLevel(loglevel)
+    formatter = logging.Formatter('[%(asctime)s] %(name)s %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    root.addHandler(ch)
+
 
 def InputFile(url, desc="", digests=None):
     """
@@ -72,7 +85,7 @@ class Align(bunnies.Transform):
         # adjust resources based on inputs and job parameters
         return {
             'vcpus': 4,
-            'memory': 4000,
+            'memory': 8000,
             'timeout': 4*3600
         }
 
@@ -101,40 +114,43 @@ class Align(bunnies.Transform):
             "curl", "-sv", "-o", "-", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
         ], show_out=True)
 
+        #
         # download reference in /scratch
+        # /scratch is shared with other jobs in the same compute environment
+        #
         ref_target = self.ref.ls()
         ref_idx_target = self.ref_idx.ls()
         ref_path = cache_remote_file(ref_target['url'], ref_target['digests']['md5'], cas_dir)
         ref_idx_path = cache_remote_file(ref_idx_target['url'], ref_idx_target['digests']['md5'], cas_dir)
 
         align_args = [
-            "time",
             "align",
             "-cas", cas_dir
         ]
         if self.params['lossy']:
-            align_args += ["-lossy"]
+            align_args.append("-lossy")
 
         r1_target = self.r1.ls()
         r2_target = self.r1.ls()
 
+        # write jobfile
         jobfile_doc = {
             self.params['sample_name']: {
                 "name": self.params['sample_name'],
                 "locations": [
-                    [r1_target['url'], r1_target['digests']['md5']],
-                    [r2_target['url'], r2_target['digests']['md5']]
+                    [r1_target['url'], "md5:" + r1_target['digests']['md5']],
+                    [r2_target['url'], "md5:" + r2_target['digests']['md5']]
                 ]
             }
         }
-
+        log.info("align job: %s", repr(jobfile_doc))
         with tempfile.NamedTemporaryFile(suffix=".job.txt", mode="wt",
                                          prefix=self.params['sample_name'], dir=workdir, delete=False) as jobfile_fd:
             json.dump(jobfile_doc, jobfile_fd)
 
         num_threads = params['resources']['vcpus']
         align_args += [
-            "-r", self.ref.url(),
+            "-r", ref_path,
             "-i", jobfile_fd.name,
             "-o", s3_output_prefix,
             "-n", str(num_threads),
@@ -143,7 +159,7 @@ class Align(bunnies.Transform):
             "-d", "1"
         ]
 
-        bunnies.run_cmd(align_args, show_out=True, cwd=workdir)
+        bunnies.run_cmd(align_args, stdout=sys.stdout, stderr=sys.stderr, cwd=workdir)
         return outputs
 
 bunnies.unmarshall.register_kind(Align)
