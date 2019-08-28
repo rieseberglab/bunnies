@@ -539,7 +539,7 @@ runcmd:
                             name)
             return found
 
-        ce_type = "EC2" # "SPOT"
+        ce_type = "SPOT" # "EC2"
 
         instance_profile_arn = config['batch_instance_profile_arn']
         spot_role_arn = config['spot_fleet_role_arn']
