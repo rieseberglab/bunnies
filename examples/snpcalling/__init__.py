@@ -131,7 +131,7 @@ class Align(bunnies.Transform):
             align_args.append("-lossy")
 
         r1_target = self.r1.ls()
-        r2_target = self.r1.ls()
+        r2_target = self.r2.ls()
 
         # write jobfile
         jobfile_doc = {
