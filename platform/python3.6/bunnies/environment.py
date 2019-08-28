@@ -197,7 +197,7 @@ class FSxDisk(object):
     def retrieve_existing(self):
         # FIXME -- the caller should inspect the state of the returned filesystem
         client = boto3.client('fsx')
-        resp = {'NextToken': ""}
+        resp = {'NextToken': None}
 
         def _tags_match(name, tags):
             name_tags = [tag for tag in tags if
@@ -210,13 +210,14 @@ class FSxDisk(object):
                              tag['Value'] == constants.PLATFORM]
             return (len(platform_tags) > 0)
 
-        while 'NextToken' in resp:
+        while "NextToken" in resp:
             kwargs = {'MaxResults': 10}
             if resp['NextToken']:
                 kwargs['NextToken'] = resp['NextToken']
+
             logger.info("listing file systems...")
             page = client.describe_file_systems(**kwargs)
-            logger.info("retrieved page with %d fs(es)", len(page['FileSystems']))
+            logger.info("retrieved page with %d fs(es) %s", len(page['FileSystems']), page)
             matches = [candidate for candidate in page['FileSystems']
                        if _tags_match(self.name, candidate['Tags'])]
             if matches:
@@ -242,7 +243,8 @@ class FSxDisk(object):
     def fsid(self):
         if not self.__fs:
             self.__fs = self.retrieve_existing()
-        return self.__fs['FileSystemId']
+
+        return self.__fs['FileSystemId'] if self.__fs else None
 
     def delete(self):
         """
@@ -252,6 +254,7 @@ class FSxDisk(object):
             fsid = self.__fs['FileSystemId']
         else:
             fs = self.retrieve_existing()
+            print("retrieved: ", fs)
             if fs is None:
                 logger.info("File system %s not found. Nothing to delete", self.name)
                 return None
@@ -300,8 +303,11 @@ class FSxDisk(object):
     def wait_deleted(self):
         """wait for the filesystem to be deleted completely"""
         client = boto3.client('fsx')
-        waiter = botocore.waiter.create_waiter_with_client("FileSystemDeleted", _custom_waiters(), client)
-        waiter.wait(FileSystemIds=[self.fsid])
+        if self.fsid:
+            waiter = botocore.waiter.create_waiter_with_client("FileSystemDeleted", _custom_waiters(), client)
+            waiter.wait(FileSystemIds=[self.fsid])
+        else:
+            logger.info("filesystem not found")
 
 
 class ComputeEnv(object):
@@ -322,8 +328,8 @@ class ComputeEnv(object):
         if scratch_size_gb > 0:
             self.disks['scratch'] = {
                 'name': "scratch",
-                'obj': FSxDisk(name + "-scratch", scratch_size_gb),
-                'instance_mountpoint': "/mnt/" + name + "-scratch"
+                'obj': FSxDisk(self.name + "-scratch", scratch_size_gb),
+                'instance_mountpoint': "/mnt/" + self.name + "-scratch"
             }
 
     def register_simple_batch_jobdef(self, name, container_image):
@@ -630,7 +636,7 @@ runcmd:
         # - wait for job queue to settle.
         # - delete job queue
         # - delete compute env
-        # - delete launch template
+        # - delete launch template(s)
 
     def wait_ready(self):
         """ensure all the entities are VALID and ready to execute things"""
