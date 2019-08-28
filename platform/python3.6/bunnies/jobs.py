@@ -497,6 +497,7 @@ def submit_job(name, queue, jobdef, command=None, vcpus=None, memory=None, envir
     logger.debug("job submitted %s", submission)
     return submission
 
+
 def describe_jobs(jobs):
     # max 100 at a time
     all_jobs = []
@@ -509,6 +510,7 @@ def describe_jobs(jobs):
         all_jobs += res['jobs']
 
     return all_jobs
+
 
 def wait_for_completion(jobs, interval=2*60, num_shown=5):
     """wait for the given jobs to either be SUCCEEDED, or FAILED.
@@ -534,6 +536,7 @@ def wait_for_completion(jobs, interval=2*60, num_shown=5):
         break
     return status_map
 
+
 def _test_jobs(**kwargs):
     role = config['job_role_arn']
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
@@ -552,6 +555,7 @@ def _test_jobs(**kwargs):
     result = ce.submit_job("simple-sleeper", jobdef['jobDefinitionArn'],
                            ['simple-test-job.sh', '600'], 1, 128)
     print(result)
+
 
 def _show_job_logs(jobid, **kwargs):
     job = AWSBatchSimpleJob.from_job_id(jobid)
@@ -572,6 +576,7 @@ def _show_job_logs(jobid, **kwargs):
         print("runtime: %6.3fs (%s)" % (secs, str(run_t)))
         print("total: %6.3fs (%s)" % (from_submit, str(submit_t)))
 
+
 def main():
     import argparse
     import sys
@@ -587,6 +592,7 @@ def main():
     subp = subparsers.add_parser("logs", help="inspect job logs")
 
     subp.add_argument("jobid", metavar="JOBID", type=str, help="the id of the job")
+    subp.add_argument("--reverse", action="store_true", default=False, help="show the logs in reverse order")
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -601,6 +607,7 @@ def main():
     }[args.command]
     retcode = func(**vars(args))
     sys.exit(int(retcode) if retcode is not None else 0)
+
 
 if __name__ == "__main__":
     main()
