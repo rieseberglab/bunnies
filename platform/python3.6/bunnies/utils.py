@@ -28,6 +28,7 @@ def data_files(globname):
     matches = [permfile for permfile in glob.glob(os.path.join(data_dir, globname))]
     return matches
 
+
 def find_config_file(startdir, filname):
     """recurse in folder and parents to find filname and open it
        returns (fd, path)
@@ -73,7 +74,28 @@ def s3_split_url(objecturl):
 
 
 def get_blob_meta(objecturl, logprefix=""):
-    """fetches metadata about the given object. if the object doesn't exist. raise NoSuchFile"""
+    """fetches metadata about the given object. if the object doesn't exist. raise NoSuchFile if file doesn't exist
+
+      Ex response:
+
+       {'ContentType': 'binary/octet-stream',
+        'Metadata': {},
+        'ContentLength': 27523682,
+        'LastModified': datetime.datetime(2019, 9, 4, 19, 42, tzinfo=tzutc()),
+        'AcceptRanges': 'bytes',
+        'ETag': '"9dc5c71abae60eec7ac0a27406789b24-6"',
+        'ResponseMetadata': {'RequestId': '481AA20234257B4A',
+                             'HostId': '+37u4lmlkTIFq/2tMcAYbfwtfX+zV54xj+9lRZk2tBCFFVtBDKY4uxcxlCEogGxXWBLokv+fOXM=',
+                             'RetryAttempts': 0,
+                             'HTTPHeaders': {'accept-ranges': 'bytes', 'content-length': '27523682',
+                                             'date': 'Wed, 04 Sep 2019 19:50:14 GMT', 'content-type': 'binary/octet-stream',
+                                             'x-amz-id-2': '+37u4lmlkTIFq/2tMcAYbfwtfX+zV54xj+9lRZk2tBCFFVtBDKY4uxcxlCEogGxXWBLokv+fOXM=',
+                                             'etag': '"9dc5c71abae60eec7ac0a27406789b24-6"',
+                                             'x-amz-request-id': '481AA20234257B4A', 'server':
+                                             'AmazonS3', 'last-modified': 'Wed, 04 Sep 2019 19:42:00 GMT'},
+                             'HTTPStatusCode': 200}
+       }
+    """
     bucketname, keyname = s3_split_url(objecturl)
     logprefix = logprefix + " " if logprefix else logprefix
     logger.debug("%sfetching meta for URL: %s", logprefix, objecturl)
