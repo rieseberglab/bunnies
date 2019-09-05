@@ -40,6 +40,11 @@ class SchedNode(object):
 
         # node is either: ready, waiting, submitted
 
+        if self.state == "submitted":
+            # we're not going to change that state. we need to wait for
+            # the user to change state explicitly.
+            return
+
         deps = [d for d in self.deps.values()]
         dep_states = {}
         for d in deps:
@@ -72,10 +77,10 @@ class SchedNode(object):
             self.sched.enqueue(self)
             return
 
-    def depends_on(self, dep):
+    def depends_on(self, dep_node):
         assert self.state in ('waiting', 'ready')
-        self.deps[dep.uid] = dep
-        dep.rdeps[dep.uid] = self
+        self.deps[dep_node.uid] = dep_node
+        dep_node.rdeps[dep_node.uid] = self
 
     def failed(self, reason="failed"):
         assert self.state == 'submitted'
@@ -99,6 +104,19 @@ class SchedNode(object):
         self.cascade()
 
 
+def get_leaves(n, visited=None):
+    if n.uid in visited:
+        return
+
+    visited[n.uid] = True
+    if len(n.deps) == 0:
+        yield n
+    else:
+        for dep in n.deps:
+            for leaf in get_leaves(dep, visited=visited):
+                yield leaf
+
+
 def Scheduler(object):
     """the design of this scheduler is that it should be invoked
        iteratively to obtain a list of nodes that are "ready" to process.
@@ -113,18 +131,49 @@ def Scheduler(object):
         self.nodes = OrderedDict()
         self.ready = OrderedDict()
 
-    def node(self, uid):
-        node = self.nodes.get(uid)
-        if not node:
-            node = SchedNode(uid, self)
-        
-    def add_node(self, uid):
-        if uid in self.nodes:
-            return
-        self.nodes[uid] = SchedNode(uid, self)
+    def initialize(self):
+        visited = {}
+        for node in self.nodes:
+            for leaf in get_leaves(node, visited):
+                leaf.cascade()
 
-    def ready(self):
+    def add_node(self, uid):
+        if uid not in self.nodes:
+            self.nodes[uid] = SchedNode(uid, self)
+        return self.nodes[uid]
+
+    def enqueue(self, node):
+        if node.uid in self.ready:
+            return
+        self.ready[node.uid] = node
+
+    def dequeue(self, node):
+        self.ready.pop(node.uid, None)
+
+    def status(self):
         """
         get a list of nodes that are ready for submission
+        {
+          'ready': [...]
+          'done': [...]
+          'cancelled': [...]
+          'waiting': [...]
+          'submitted': [...]
+        }
+
+        For updates, users should:
+
+          - process ready nodes:
+               - inspect failures
+               - submit or cancel
         """
-        
+        status = {
+            'ready': [],
+            'done': [],
+            'cancelled': [],
+            'waiting': [],
+            'submitted': []
+        }
+        for node in self.nodes:
+            status[node.state].append(node)
+        return status
