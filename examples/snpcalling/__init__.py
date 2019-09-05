@@ -101,7 +101,6 @@ class Align(bunnies.Transform):
             ]).stdout.decode('utf-8').strip()
 
         workdir = params['workdir']
-
         s3_output_prefix = self.output_prefix()
         local_output_dir = os.path.join(workdir, "output")
 
@@ -152,13 +151,46 @@ class Align(bunnies.Transform):
         align_args += [
             "-r", ref_path,
             "-i", jobfile_fd.name,
-            "-o", s3_output_prefix,
+            "-o", local_output_dir,
             "-w", workdir,
             "-m",
             "-d", "1"
         ]
 
         bunnies.run_cmd(align_args, stdout=sys.stdout, stderr=sys.stderr, cwd=workdir)
+
+        def _check_output_file(field, url, is_optional=False):
+            try:
+                _ = bunnies.utils.get_blob_meta(s3url)
+                return s3url
+            except bunnies.NoSuchFile:
+                if is_optional:
+                    return None
+                raise Exception("output %s missing: %s" % (field, url))
+
+        sn = self.params['sample_name']
+        output = {
+            "bam": _check_output_file("bam", "%s/%s.bam" % (s3_output_prefix, sn)),
+            "bai": _check_output_file("bai", "%s/%s.bai" % (s3_output_prefix, sn)),
+            "illuminametrics": _check_output_file("illuminametrics", "%s/%s.illuminametrics.txt" % (s3_output_prefix, sn)),
+            "dupmetrics": _check_output_file("dupmetrics", "%s/%s.dupmetrics.txt" % (s3_output_prefix, sn)),
+            "bam_md5": _check_output_file("bam.md5", "%s/%s.bam.md5" % (s3_output_prefix, sn))
+        }
+        #
+# result file -- if this file exists, the transform has completed successfully
+# and _all_ of its outputs have been successfully saved)
+#
+# {
+#   'manifest': {...}
+#   'output': {
+#        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
+#   },
+#   'log': ["url to raw log file"]
+#   'usage': "url to resource usage statistics file"
+# }
+#
+TRANSFORM_RESULT_FILE = "transform-result.json"
+        
         return outputs
 
 bunnies.unmarshall.register_kind(Align)
