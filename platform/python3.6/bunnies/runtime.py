@@ -79,7 +79,7 @@ def update_result(result_url, logprefix="", **kwargs):
         raise ValueError("result path must be an s3 url")
 
     try:
-        with get_blob_ctx(result_path, logprefix=logprefix) as (body, info):
+        with get_blob_ctx(result_url, logprefix=logprefix) as (body, info):
             result = json.load(body)
     except NoSuchFile:
         result = {}
