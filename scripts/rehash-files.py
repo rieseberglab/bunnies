@@ -141,9 +141,9 @@ def main_handler():
     request_error_count = 0
     results = {}
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = { executor.submit(do_request, lineno, req): lineno for (lineno, req) in requests }
+        futures = { executor.submit(do_request, lineno, req): (lineno, req) for (lineno, req) in requests }
         for future in as_completed(futures):
-            lineno = futures[future]
+            lineno, req = futures[future]
             request_done_count += 1
             try:
                 log.info("request on line %d completed.", lineno)
@@ -152,7 +152,7 @@ def main_handler():
                 log.info("request result: %s", json.dumps(data, sort_keys=True, indent=4, separators=(",", ": ")))
             except Exception as exc:
                 log.error("request on line %d generated an exception: %s", lineno, exc, exc_info=exc)
-                error_result = dict(requests[lineno])
+                error_result = dict(req)
                 error_result["error"] = str(exc)
                 results[lineno] = error_result
                 request_error_count += 1

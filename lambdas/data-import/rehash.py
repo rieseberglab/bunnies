@@ -124,7 +124,8 @@ def lambda_handler(event, context):
     if not pending:
         log.info("hashes %s are already available and match expected values. no-op.", ",".join(pending))
         return _form_response(dst_bucket, dst_key, head_res['ContentLength'],
-                              head_res['ResponseMetadata']['last-modified'], head_res['ETag'], head_res['Metadata'])
+                              head_res['ResponseMetadata']['HTTPHeaders']['last-modified'],
+                              head_res['ETag'], head_res['Metadata'])
 
     # GET OBJECT
     resp = client.get_object(Bucket=src_bucket, Key=src_key, IfMatch=orig_etag)
