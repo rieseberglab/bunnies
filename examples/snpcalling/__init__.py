@@ -86,7 +86,7 @@ class Align(bunnies.Transform):
         # adjust resources based on inputs and job parameters
         return {
             'vcpus': 4,
-            'memory': 8000,
+            'memory': 12000,
             'timeout': 4*3600
         }
 
