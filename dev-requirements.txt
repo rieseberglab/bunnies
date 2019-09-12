@@ -1,0 +1,1 @@
+-e platform/python3.6[dev]

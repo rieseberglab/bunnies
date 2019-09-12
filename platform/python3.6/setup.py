@@ -143,7 +143,7 @@ setup(
     extras_require={  # Optional
         'dev': ['pylint', 'flake8'],
         'lambda': ['requests', 'boto3==1.9.35'],
-        'build': ['requests', 'boto3==1.9.35', 'awscli']
+        'build': ['requests', 'boto3==1.9.227', 'awscli==1.16.237']
     },
 
     # If there are data files included in your packages that need to be

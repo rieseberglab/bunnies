@@ -18,11 +18,11 @@ Installation
         and/or you don't have root access to install packages,
         you can bootstrap its installation as a regular user with conda_
 
-            ~/miniconda3/bin/conda env create -f environment.yml -n python36
+            ~/miniconda3/bin/conda env create -n python36 python=3.6
             source ~/miniconda3/bin/activate python36
 
             # inside the conda environment, you have python3.6
-	    (python36) $ pip install --upgrade pip
+            (python36) $ pip install --upgrade pip
             (python36) $ pip install virtualenv
 
             # create a python3.6 virtual env

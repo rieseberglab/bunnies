@@ -1,7 +1,7 @@
 # pip requirements file for python 3
 #
 # 1) create virtualenv:
-#    virtualenv -p python3 --prompt="(reprod) " .venv
+#    virtualenv -p python3.6 --prompt="(reprod) " .venv
 # 2) activate
 #    source .venv/bin/activate
 # 3) get deps
