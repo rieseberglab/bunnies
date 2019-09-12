@@ -8,6 +8,7 @@ import logging
 
 log = logging.getLogger(__package__)
 
+ANALYTICS_IMG = "rieseberglab/analytics:6-2.5.3"
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
@@ -34,7 +35,7 @@ class Align(bunnies.Transform):
     """
     Align a paired-end fastq or sra file against a reference genome
     """
-    ALIGN_IMAGE = "rieseberglab/analytics:6-2.5.1"
+    ALIGN_IMAGE = ANALYTICS_IMAGE
     VERSION = "1"
 
     __slots__ = ("sample_name", "r1", "r2", "ref", "ref_idx")
@@ -190,7 +191,7 @@ class Merge(bunnies.Transform):
     merge one or more bam files and modify the readgroup with the
     provided information. bams are merged in the order provided.
     """
-    MERGE_IMAGE = "rieseberglab/analytics:5-2.4.0"
+    MERGE_IMAGE = ANALYTICS_IMAGE
     VERSION = "1"
 
     __slots__ = ("sample_name",)
