@@ -529,7 +529,7 @@ def wait_for_completion(jobs, interval=2*60, num_shown=5):
                 logger.info("job summary:")
                 logger.info("    %-10s (%-3d): %s ...", status.lower(), len(status_map[status]), status_map[status][0:num_shown])
         if incomplete > 0:
-            logger.info("waiting for %d jobs to complete (check interval=%ss)...", incomplete, interval)
+            logger.info("waiting for %d job(s) to complete (check interval=%ss)...", incomplete, interval)
             time.sleep(interval)
             continue
         # all jobs done (success/failure)
