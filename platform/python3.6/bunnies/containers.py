@@ -14,6 +14,7 @@ import base64
 
 log = logging.getLogger(__name__)
 
+
 def _docker_login_to_registry(registry_id, registry_uri):
     log.debug("authenticating docker client to registry id %s url %s...", registry_id, registry_uri)
     client = boto3.client('ecr')
@@ -39,7 +40,7 @@ def wrap_user_image(src_image):
     images that have been seen before will be cached.
     """
     if src_image.endswith("-" + PLATFORM):
-        return user_image
+        return src_image
 
     src_repo, src_tag = (src_image.rsplit(":", 1) + ["latest"])[0:2]
     src_image = src_repo + ":" + src_tag
@@ -58,8 +59,13 @@ def wrap_user_image(src_image):
     log.info("image will be hosted in ECR repository %s ...", dst_repo)
     client = boto3.client("ecr")
     try:
-        resp = client.create_repository(repositoryName=dst_repo,
-                                        tags=[{'Key': "platform", 'Value': PLATFORM}])['repository']
+        resp = client.create_repository(repositoryName=dst_repo)['repository']
+        # perhaps a version mismatch? boto 1.9.35 claims that "tags" keyword
+        # is invalid in create_repository()
+
+        tags = [{'Key': "platform", 'Value': PLATFORM}]
+        arn = resp['repository']['repositoryArn']
+        client.tag_resource(resourceArn=arn, tags=tags)
     except ClientError as clierr:
         if clierr.response['Error']['Code'] == 'RepositoryAlreadyExistsException':
             resp = client.describe_repositories(repositoryNames=[dst_repo])['repositories'][0]
