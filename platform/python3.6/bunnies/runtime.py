@@ -6,13 +6,11 @@ import os.path
 import json
 import io
 import logging
-import subprocess
 import shutil
 import tempfile
 import zipfile
 
-from .unmarshall import unmarshall
-from .utils import load_json, get_blob_ctx, parse_digests, walk_tree, run_cmd
+from .utils import get_blob_ctx, walk_tree, run_cmd
 from .exc import NoSuchFile
 
 from . import transfers
@@ -34,6 +32,7 @@ PLATFORM_EXTRA = [
      "dst": os.path.join(constants.PLATFORM, name)}
     for name, fpath in active_config_files().items()
 ]
+
 
 def add_user_deps(root, includepath, excludes=(), exclude_patterns=()):
     """
@@ -61,6 +60,7 @@ def add_user_deps(root, includepath, excludes=(), exclude_patterns=()):
 
 # list of (path_to_source, path_in_dest)
 add_user_deps._files = []
+
 
 def add_user_hook(python_code):
     """
