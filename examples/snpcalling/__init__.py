@@ -8,7 +8,7 @@ import logging
 
 log = logging.getLogger(__package__)
 
-ANALYTICS_IMG = "rieseberglab/analytics:6-2.5.3"
+ANALYTICS_IMAGE = "rieseberglab/analytics:6-2.5.3"
 
 def setup_logging(loglevel=logging.INFO):
     """configure custom logging for the platform"""
