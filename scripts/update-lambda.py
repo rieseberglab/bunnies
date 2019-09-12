@@ -75,7 +75,7 @@ def zip_lambda_dir(ziproot, zipfd):
 
 
 def get_env_override(lambdadir):
-    envfd = bunnies.utils.find_config_file(lambdadir, ".env.override.json")
+    envfd, _ = bunnies.utils.find_config_file(lambdadir, ".env.override.json")
     if not envfd:
         return {}
     envjson = json.load(envfd)
