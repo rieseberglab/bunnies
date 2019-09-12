@@ -182,12 +182,19 @@ def lambda_handler(event, context):
         log.info("overwriting object s3://%s/%s with metadata: %s", dst_bucket, dst_key, new_meta)
     else:
         log.info("saving object as s3://%s/%s with metadata: %s", dst_bucket, dst_key, new_meta)
+
+    copy_attr = {}
+    for attr in ('CacheControl', 'ContentDisposition', 'ContentEncoding', 'ContentLanguage'):
+        if resp.get(attr, None):
+            copy_attr[attr] = resp[attr]
+
     copy_result = client.copy_object(Key=dst_key, Bucket=dst_bucket,
                                      CopySource={"Key": src_key, "Bucket": src_bucket},
                                      CopySourceIfMatch=resp['ETag'],
                                      ContentType=orig_ct,
                                      Metadata=new_meta,
-                                     MetadataDirective='REPLACE')
+                                     MetadataDirective='REPLACE',
+                                     **copy_attr)
     log.info("copy completed in %8.3fseconds", time.time() - start_time)
     log.debug("copy result: %s", copy_result)
     return _form_response(dst_bucket, dst_key, resp['ContentLength'],

@@ -137,7 +137,8 @@ def yield_in_chunks(fp, chunk_size_bytes):
         yield chunk
 
 
-def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_length=None, content_md5=None, meta=None, logprefix=""):
+def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_length=None, content_md5=None, content_encoding=None,
+                            meta=None, logprefix=""):
     """
     Upload the inputfile (stream) using a single PUT operation
 
@@ -166,6 +167,9 @@ def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_lengt
         'ContentLength': content_length,
         'Metadata': {}
     }
+
+    if content_encoding:
+        extra_args['ContentEncoding'] = content_encoding
 
     if meta:
         extra_args['Metadata'].update(meta)

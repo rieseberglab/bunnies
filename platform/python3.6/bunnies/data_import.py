@@ -27,7 +27,12 @@ def guess_type(fil):
         import mimetypes
         mimetypes.init()
         guess_type._cache = mimetypes.guess_type
-    return guess_type._cache(fil)
+    res = guess_type._cache(fil)
+    ct, ce = res[0], res[1]
+    if ct is None:
+        ct = "application/octet-stream"
+    return (ct, ce)
+
 guess_type._cache = None
 
 def guess_length(fp):
@@ -86,17 +91,18 @@ class DataImport(object):
         ensure it matches what is expected.
         """
         head_res = utils.get_blob_meta(s3url, logprefix=logprefix)
+        log.info("RES %s", head_res)
         if expected_len >= 0 and expected_len != head_res['ContentLength']:
             raise ImportError("destination exists. length mismatch: destination has %s, but expected %s" % (
                 head_res['ContentLength'], expected_len))
 
         if expected_ct and expected_ct != head_res.get('ContentType'):
             raise ImportError("destination %s exists. content type mismatch: destination has %s, but expected %s" % (
-                s3url, head_res['ContentType'], expected_ct))
+                s3url, head_res.get('ContentType'), expected_ct))
 
         if expected_ce and expected_ce != head_res.get('ContentEncoding'):
             raise ImportError("destination %s exists. content encoding mismatch: destination has %s, but expected %s" % (
-                s3url, head_res['ContentType'], expected_ce))
+                s3url, head_res.get('ContentEncoding'), expected_ce))
 
         digest_verifications = 0
         head_digests = {key[len(constants.DIGEST_HEADER_PREFIX):]: val for key, val in head_res['Metadata'].items()
@@ -212,6 +218,7 @@ class DataImport(object):
         expected_digests = utils.parse_digests([v for v in digest_urls.values()])
 
         guessed = guess_type(in_path)
+        log.info("guessed Content-Type: %s Content-Encoding: %s", guessed[0], guessed[1])
         if not content_type:
             content_type = guessed[0]
         if not content_encoding:
