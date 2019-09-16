@@ -111,6 +111,8 @@ def lambda_handler(event, context):
                          if digest_type.startswith(DIGEST_HEADER)}
 
     for digest_type in completed_digests:
+        if digest_type not in expected_digests:
+            continue
         if expected_digests[digest_type] and completed_digests[digest_type] and \
            expected_digests[digest_type] != completed_digests[digest_type]:
             return {"error": "digest mismatch %s" % (digest_type,)}
