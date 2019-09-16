@@ -8,7 +8,7 @@ Installation
 
 1. create virtualenv:
 
-       virtualenv -p python3 --prompt="(reprod) " .venv
+       virtualenv -p python3 --prompt="(bunnies) " .venv
 
    _Note: if you don't have virtualenv, you can install it first with
         `pip install virtualenv`, or use the builtin module in python3,
@@ -26,7 +26,7 @@ Installation
             (python36) $ pip install virtualenv
 
             # create a python3.6 virtual env
-            (python36) $ virtualenv --prompt="(reprod) " -p python3.6 .venv
+            (python36) $ virtualenv --prompt="(bunnies) " -p python3.6 .venv
 
             # from this point on you no longer need the conda environment.
             # a copy of the python3.6 runtime was added to the .venv virtualenv
