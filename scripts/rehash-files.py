@@ -7,7 +7,8 @@
    on the CLI, then the object then remote files with digest mismatches are deleted.
 
    On success, the remote file's metadata will be updated with the verified
-   digests.
+   digests. Pass --extra-digest ALGO to request an additional digest to be computed
+   on the remote.
 
    Input syntax (line-oriented):
 
@@ -50,7 +51,6 @@ def _s3_split_url(objecturl):
 
 def do_request(batch_no, req):
     """execute one request. tail the logs. wait for completion"""
-    log.debug("do_request: %s", req)
 
     tmp_src = _s3_split_url(req['input'])
     cpy_dst = _s3_split_url(req['output'])
@@ -92,8 +92,12 @@ def main_handler():
 
     parser.add_argument("--threads", metavar="THREADS", type=int, default=1)
     parser.add_argument("--delete-mismatch", dest="delete_mismatch", action="store_true", default=False)
+    parser.add_argument("--extra-digest", metavar="ALGO", dest="digests", action="append", default=[])
+
     args = parser.parse_args()
 
+    args.digests = [ dig.lower() for dig in args.digests ]
+        
     creds = {}
     creds['username'] = os.environ.get('USERNAME', '')
     creds['password'] = os.environ.get('PASSWORD', '')
@@ -113,6 +117,13 @@ def main_handler():
                 outputurl = dvalue
 
             digests[dtype.lower()] = dvalue.lower()
+
+        # specify that extra digests get computed, if needed
+        if len(digests) == 0:
+            digests['md5'] = None
+        for extra_digest in args.digests:
+            if extra_digest not in digests:
+                digests[extra_digest] = None
 
         req_obj = {
             'input': url,
@@ -149,7 +160,7 @@ def main_handler():
                 log.info("request on line %d completed.", lineno)
                 data = future.result()
                 results[lineno] = data
-                log.info("request result: %s", json.dumps(data, sort_keys=True, indent=4, separators=(",", ": ")))
+                log.info("line %d request result: %s", lineno, json.dumps(data, sort_keys=True, indent=4, separators=(",", ": ")))
             except Exception as exc:
                 log.error("request on line %d generated an exception: %s", lineno, exc, exc_info=exc)
                 error_result = dict(req)
