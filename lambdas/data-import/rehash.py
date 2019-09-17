@@ -51,6 +51,8 @@ import time
 import logging
 
 from bunnies import transfers, constants
+from botocore.exceptions import ClientError
+
 
 DIGEST_HEADER = constants.DIGEST_HEADER_PREFIX
 MB = 1024*1024
@@ -171,6 +173,8 @@ def lambda_handler(event, context):
     log.info("computed %s hashes in %8.3f seconds.", ",".join(pending), time.time() - start_time)
 
     for digest_type in completed_digests:
+        if not digest_type in expected_digests:
+            continue
         if expected_digests[digest_type] and completed_digests[digest_type] and \
            expected_digests[digest_type] != completed_digests[digest_type]:
             return {"error": "digest mismatch %s" % (digest_type,)}
@@ -191,17 +195,87 @@ def lambda_handler(event, context):
         if resp.get(attr, None):
             copy_attr[attr] = resp[attr]
 
-    copy_result = client.copy_object(Key=dst_key, Bucket=dst_bucket,
-                                     CopySource={"Key": src_key, "Bucket": src_bucket},
-                                     CopySourceIfMatch=resp['ETag'],
-                                     ContentType=orig_ct,
-                                     Metadata=new_meta,
-                                     MetadataDirective='REPLACE',
-                                     **copy_attr)
-    log.info("copy completed in %8.3fseconds", time.time() - start_time)
-    log.debug("copy result: %s", copy_result)
-    return _form_response(dst_bucket, dst_key, resp['ContentLength'],
-                          copy_result['CopyObjectResult']['LastModified'].strftime("%a, %d %b %Y %H:%M:%S %Z"),
-                          copy_result['CopyObjectResult']['ETag'],
-                          new_meta)
+    total_len = resp['ContentLength']
+    # copy_object has a 5GB limit
+    max_copy_len = 5368709120
+
+    if total_len <= max_copy_len:
+        copy_result = client.copy_object(Key=dst_key, Bucket=dst_bucket,
+                                         CopySource={"Key": src_key, "Bucket": src_bucket},
+                                         CopySourceIfMatch=resp['ETag'],
+                                         ContentType=orig_ct,
+                                         Metadata=new_meta,
+                                         MetadataDirective='REPLACE',
+                                         **copy_attr)
+        log.debug("copy result: %s", copy_result)
+        log.info("copy completed in %8.3fseconds", time.time() - start_time)
+        return _form_response(dst_bucket, dst_key, total_len,
+                              copy_result['CopyObjectResult']['LastModified'].strftime("%a, %d %b %Y %H:%M:%S %Z"),
+                              copy_result['CopyObjectResult']['ETag'],
+                              new_meta)
+    else:
+        # multipart copy
+        mpart = None
+        parts = []
+        try:
+            mpart = client.create_multipart_upload(Bucket=dst_bucket, Key=dst_key,
+                                               ContentType=orig_ct,
+                                               Metadata=new_meta,
+                                               **copy_attr)
+            for partnum, start in enumerate(range(0, total_len, max_copy_len)):
+                partend = min(start + max_copy_len, total_len) - 1
+                log.info("copying part %d, bytes=%d-%d", partnum, start, partend)
+                part_res = client.upload_part_copy(Bucket=dst_bucket, Key=dst_key,
+                                                   CopySource={"Key": src_key, "Bucket": src_bucket},
+                                                   CopySourceIfMatch=resp['ETag'],
+                                                   CopySourceRange="bytes=%d-%d" % (start, partend),
+                                                   PartNumber=partnum+1,
+                                                   UploadId=mpart['UploadId'])
+                parts.append((partnum+1, part_res['CopyPartResult']['ETag']))
+
+            # finish it
+            parts_document = {
+                'Parts': [{'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts]
+            }
+
+            copy_result = client.complete_multipart_upload(Bucket=dst_bucket, Key=dst_key, UploadId=mpart['UploadId'],
+                                                           MultipartUpload=parts_document)
+            mpart = None
+            log.info("copy result: %s", copy_result)
+            log.info("copy completed in %8.3fseconds", time.time() - start_time)
+
+            # check final object
+            head_attempts = 0
+            head_res2 = None
+            while head_attempts < 5:
+                try:
+                    head_attempts += 1
+                    head_res2 = client.head_object(Bucket=dst_bucket, Key=dst_key, IfMatch="FOO")
+                    break
+                except ClientError as clierr:
+                    if clierr.response['Error']['Code'] == '412':
+                        # bad ETag -- retrieved old version
+                        time.sleep(5.0)
+                        continue
+                    log.error("client error: %s code=%s", str(clierr), clierr.response['Error']['Code'])
+                    raise
+
+            if head_res2:
+                assert head_res['ContentLength'] == head_res2['ContentLength']
+                obj_date = head_res2['ResponseMetadata']['HTTPHeaders']['last-modified']
+            else:
+                log.error("could not retrieve obj HEAD")
+                obj_date = copy_result['ResponseMetadata']['HTTPHeaders']['date']
+
+            return _form_response(dst_bucket, dst_key, head_res['ContentLength'],
+                                  obj_date,
+                                  copy_result['ETag'],
+                                  new_meta)
+        finally:
+            if mpart:
+                try:
+                    client.abort_multipart_upload(Bucket=bucketname, Key=keyname, UploadId=mpart['UploadId'])
+                    log.debug("multipart upload aborted")
+                except Exception as exc:
+                    log.error("could not abort multipart upload:", exc_info=exc)
 
