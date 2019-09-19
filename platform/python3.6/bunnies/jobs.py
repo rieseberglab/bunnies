@@ -104,6 +104,10 @@ class AWSBatchSimpleJob(object):
             jobs=[self.job_id]
         )['jobs'][0]
 
+        if not job_desc['attempts']:
+            logger.debug("job-desc: %s", job_desc)
+            return None
+
         attempt = job_desc['attempts'][attempt]
         attempt['createdAt'] = job_desc['createdAt']
         return attempt
@@ -122,6 +126,10 @@ class AWSBatchSimpleJob(object):
         job_desc = client.describe_jobs(
             jobs=[self.job_id]
         )['jobs'][0]
+
+        if not job_desc['attempts']:
+            logger.info("no job attempts: %s", job_desc)
+            return
 
         attempt = job_desc['attempts'][attempt]
         container_logs = attempt['container']['logStreamName']
