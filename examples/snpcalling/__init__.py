@@ -152,7 +152,7 @@ class Align(bunnies.Transform):
         align_args += [
             "-r", ref_path,
             "-i", jobfile_fd.name,
-            "-o", local_output_dir,
+            "-o", s3_output_prefix,
             "-w", workdir,
             "-m",       # autodetect readgroup info
             "-d", "1",  # mark duplicates
@@ -166,19 +166,23 @@ class Align(bunnies.Transform):
                 meta = bunnies.utils.get_blob_meta(url)
                 return {"size": meta['ContentLength'], "url": url}
 
-            except bunnies.NoSuchFile:
+            except bunnies.exc.NoSuchFile:
                 if is_optional:
                     return None
                 raise Exception("output %s missing: %s" % (field, url))
 
         sn = self.params['sample_name']
+
+        def od(x):
+            return os.path.join(s3_output_prefix, x)
+
         output = {
-            "bam": _check_output_file("bam", "%s/%s.bam" % (s3_output_prefix, sn)),
-            "bamstats": _check_output_file("bamstats", "%s/%s.bamstats.txt" % (s3_output_prefix, sn)),
-            "bai": _check_output_file("bai", "%s/%s.bai" % (s3_output_prefix, sn)),
-            "illuminametrics": _check_output_file("illuminametrics", "%s/%s.illuminametrics.txt" % (s3_output_prefix, sn)),
-            "dupmetrics": _check_output_file("dupmetrics", "%s/%s.dupmetrics.txt" % (s3_output_prefix, sn)),
-            "bam_md5": _check_output_file("bam.md5", "%s/%s.bam.md5" % (s3_output_prefix, sn))
+            "bam": _check_output_file("bam", "%s.bam" % od(sn)),
+            "bamstats": _check_output_file("bamstats", "%s.bamstats.txt" % od(sn)),
+            "bai": _check_output_file("bai", "%s.bai" % od(sn)),
+            "illuminametrics": _check_output_file("illuminametrics", "%s.illuminametrics.txt" % od(sn)),
+            "dupmetrics": _check_output_file("dupmetrics", "%s.dupmetrics.txt" % od(sn)),
+            "bam_md5": _check_output_file("bam.md5", "%s.bam.md5" % od(sn))
         }
 
         return output
