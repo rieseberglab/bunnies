@@ -2,6 +2,11 @@
 
 from collections import OrderedDict
 
+class SchedError(Exception):
+    pass
+
+class SchedStateError(SchedError):
+    pass
 
 class SchedNode(object):
     """
@@ -19,13 +24,24 @@ class SchedNode(object):
     def __init__(self, uid, sched):
         self.uid = uid
         self.sched = sched
-        self.state = 'waiting'  # waiting, ready, done, cancelled
+        self.state = 'waiting'  # waiting, ready, done, cancelled, submitted
         self.failures = []
         self.deps = {}
         self.rdeps = {}
 
+    def __str__(self):
+        return "N(%s)" % (self.uid,)
+
+    def __repr__(self):
+        return "SchedNode(%s)" % (self.uid,)
+
     def is_active(self):
         return self.state not in ('done', 'cancelled')
+
+    def __expect_state(self, op, valid):
+        if self.state not in valid:
+            raise SchedStateError("%s: invalid state transition. node %s is in state %s but expected one of %s" % (
+                                  repr(op), self, repr(self.state), repr(valid)))
 
     def cascade(self):
         self.sched.dequeue(self)
@@ -78,30 +94,41 @@ class SchedNode(object):
             return
 
     def depends_on(self, dep_node):
-        assert self.state in ('waiting', 'ready')
+        self.__expect_state("depends_on", ('waiting', 'ready'))
         self.deps[dep_node.uid] = dep_node
-        dep_node.rdeps[dep_node.uid] = self
+        dep_node.rdeps[self.uid] = self
 
     def failed(self, reason="failed"):
-        assert self.state == 'submitted'
+        self.__expect_state("failed", ('submitted',))
         self.failures.append(reason)
         self.state = 'waiting'
         self.cascade()
 
     def submit(self):
-        assert self.state == 'ready'
+        self.__expect_state("submit", ("ready",))
         self.state = 'submitted'
         self.cascade()
 
     def done(self):
-        assert self.state in ("ready", "submitted")
+        self.__expect_state("done", ("ready", "submitted"))
         self.state = 'done'
         self.cascade()
 
     def cancel(self):
-        assert self.state in ('waiting', 'ready', 'submitted')
+        self.__expect_state("cancel", ("waiting", "ready", "submitted"))
         self.state = 'cancelled'
         self.cascade()
+
+    # def __cmp__(self, other):
+    #     if not other:
+    #         return -1
+    #     if not isinstance(other, SchedNode):
+    #         return -1
+    #     if self.uid < other.uid:
+    #         return -1
+    #     if self.uid > other.uid:
+    #         return 1
+    #     return 0
 
 
 def get_leaves(n, visited=None):
@@ -112,12 +139,12 @@ def get_leaves(n, visited=None):
     if len(n.deps) == 0:
         yield n
     else:
-        for dep in n.deps:
+        for dep in n.deps.values():
             for leaf in get_leaves(dep, visited=visited):
                 yield leaf
 
 
-def Scheduler(object):
+class Scheduler(object):
     """the design of this scheduler is that it should be invoked
        iteratively to obtain a list of nodes that are "ready" to process.
 
@@ -133,7 +160,7 @@ def Scheduler(object):
 
     def initialize(self):
         visited = {}
-        for node in self.nodes:
+        for node in self.nodes.values():
             for leaf in get_leaves(node, visited):
                 leaf.cascade()
 
@@ -164,8 +191,11 @@ def Scheduler(object):
         For updates, users should:
 
           - process ready nodes:
-               - inspect failures
-               - submit or cancel
+               - inspect failures (len(node.failures) != 0)
+               - submit() or cancel()
+
+        node.submit(), node.done(), and node.cancel() will propagate
+        state to nodes that depend on them.
         """
         status = {
             'ready': [],
@@ -174,6 +204,6 @@ def Scheduler(object):
             'waiting': [],
             'submitted': []
         }
-        for node in self.nodes:
+        for node in self.nodes.values():
             status[node.state].append(node)
         return status
