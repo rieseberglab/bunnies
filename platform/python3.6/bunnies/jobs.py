@@ -69,9 +69,12 @@ class AWSBatchSimpleJob(object):
     @classmethod
     def from_job_id(cls, job_id):
         client = boto3.client('batch')
-        job_desc = client.describe_jobs(
+        job_descs = client.describe_jobs(
             jobs=[job_id]
-        )['jobs'][0]
+        )['jobs']
+        if not job_descs:
+            return None
+        job_desc = job_descs[0]
         job_name = job_desc['jobName']
         job_def = job_desc['jobDefinition']
         inst = cls(job_name, job_def)
@@ -535,7 +538,7 @@ def wait_for_completion(jobs, interval=2*60, num_shown=5):
 
             for status in sorted(status_map.keys()):
                 logger.info("job summary:")
-                logger.info("    %-10s (%-3d): %s ...", status.lower(), len(status_map[status]), status_map[status][0:num_shown])
+                logger.info("    %-10s (%-3d): %s ...", status, len(status_map[status]), status_map[status][0:num_shown])
         if incomplete > 0:
             logger.info("waiting for %d job(s) to complete (check interval=%ss)...", incomplete, interval)
             time.sleep(interval)
@@ -566,7 +569,12 @@ def _test_jobs(**kwargs):
 
 
 def _show_job_logs(jobid, **kwargs):
+    import sys
+
     job = AWSBatchSimpleJob.from_job_id(jobid)
+    if not job:
+        sys.stderr.write("no logs found for job id %s\n" % (jobid,))
+        return 1
 
     def _get_time(ms):
         return datetime.fromtimestamp(ms/1000.0).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
