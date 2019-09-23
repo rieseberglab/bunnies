@@ -127,14 +127,14 @@ class BuildNode(object):
             settings = {
                 'vcpus': resources.get('vcpus', None),
                 'memory': resources.get('memory', None),
-                'timeout': resources.get('timeout', None),
+                'timeout': resources.get('timeout', -1),
                 'environment': {
                     "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                     "BUNNIES_USER_DEPS": user_deps_url,
                     "BUNNIES_JOBID": job_id,
                 }
             }
-            if settings.get('timeout', 1) <= 0:
+            if settings.get('timeout') <= 0:
                 settings['timeout'] = 24*3600*7 # 7 days
 
             compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
@@ -365,6 +365,7 @@ class BuildGraph(object):
             failed_jobs = statuses.get('FAILED', [])
             if failed_jobs:
                 raise exc.BuildException("One or more jobs failed to build.")
+
 
 def build_target(roots):
     """
