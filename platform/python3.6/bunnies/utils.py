@@ -111,7 +111,7 @@ def get_blob_meta(objecturl, logprefix=""):
     return head_res
 
 
-class StreamingBodyCxt(object):
+class StreamingBodyCtx(object):
     __slots__ = ("res", "body")
 
     def __init__(self, res):
@@ -140,10 +140,10 @@ def get_blob_ctx(objecturl, logprefix=""):
     try:
         res = s3.get_object(Bucket=bucketname, Key=keyname)
     except ClientError as clierr:
-        if clierr.response['Error']['Code'] == '404':
+        error_code = clierr.response['Error']['Code']
+        if error_code in ('404', 'NoSuchKey'):
             raise NoSuchFile(objecturl)
-        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(clierr.response['Error']['Code']), objecturl,
-            exc_info=clierr)
+        logger.error("%scould not fetch URL (%s): %s", logprefix, repr(error_code), objecturl, exc_info=clierr)
         raise
     return StreamingBodyCtx(res)
 
@@ -157,6 +157,7 @@ def canonical_hash(canon_obj, algo='sha1'):
     digest_obj = getattr(hashlib, algo)()
     digest_obj.update(serialized)
     return "%s_%s" % (algo, digest_obj.hexdigest())
+
 
 def load_json(obj):
     if isinstance(obj, str):
