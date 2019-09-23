@@ -85,11 +85,12 @@ def update_result(result_url, logprefix="", **kwargs):
         result = {}
 
     for field in ('output', 'log', 'usage', 'manifest', 'output'):
-        if field in kwargs.get(field, None) is not None:
+        if field in kwargs:
             result[field] = kwargs.get(field)
 
     # push the result back
-    fp = io.StringIO(json.dumps(result, sort_keys=True, indent=4, separators=(',', ': ')))
+    json_str = json.dumps(result, sort_keys=True, indent=4, separators=(',', ': '))
+    fp = io.BytesIO(json_str.encode('utf-8'))
     transfers.s3_streaming_put(fp, result_url, content_type="application/json",
                                meta=None, logprefix=logprefix)
 
