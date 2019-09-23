@@ -15,7 +15,7 @@ from .exc import NoSuchFile
 
 from . import transfers
 from . import constants
-from .config import config, active_config_files
+from .config import active_config_files
 from . import data_import
 
 log = logging.getLogger(__name__)
