@@ -121,7 +121,7 @@ class StreamingBodyCtx(object):
     def __enter__(self):
         return self.body, self.res
 
-    def __exit_(self, typ, value, traceback):
+    def __exit__(self, typ, value, traceback):
         self.body.close()
 
 
@@ -165,9 +165,10 @@ def load_json(obj):
     elif isinstance(obj, bytes):
         return json.loads(obj.decode('utf-8'))
     elif hasattr(obj, "read"):
-        return json.load(data)
+        return json.load(obj)
     else:
         raise TypeError("cannot load json from this object")
+
 
 def parse_digests(digests):
     """
