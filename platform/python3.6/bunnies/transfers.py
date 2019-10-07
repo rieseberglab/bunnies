@@ -1,4 +1,5 @@
 
+import os
 import time
 import logging
 import hashlib
@@ -189,6 +190,24 @@ def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_lengt
         log.error("%s client error: %s", logprefix, str(clierr))
         raise ImportError("error in upload to bucket:%s key:%s: %s" %
                           (bucketname, keyname, clierr.response['Error']['Code']))
+
+
+def s3_download_file(inputurl, outputpath, logprefix=""):
+    """download the given s3 url to the pathname given"""
+    bucketname, keyname = utils.s3_split_url(inputurl)
+    if not keyname:
+        log.error("%s empty key given", logprefix)
+        raise ValueError("empty key given")
+    if logprefix:
+        logprefix += " "
+
+    log.info("%sdownloading %s => %s", logprefix, inputurl, outputpath)
+    s3 = boto3.client('s3')
+    # this downloads it to a temp file
+    s3.download_file(bucketname, keyname, outputpath)
+    st_size = os.stat(outputpath).st_size
+    log.info("%sdownloaded... %s (%.3fMiB)", logprefix, outputpath, st_size / (1024 * 1024))
+    return outputpath
 
 
 def s3_streaming_put(inputfp, outputurl, content_type=None, content_length=-1, content_encoding=None, meta=None, logprefix=""):
