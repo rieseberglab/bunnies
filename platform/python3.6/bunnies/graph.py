@@ -191,6 +191,9 @@ class Input(Cacheable):
         # node it is referencing.
         return self.node.canonical()
 
+    def ls(self):
+        return self.node.ls()
+
     def manifest(self):
         return {
             constants.MANIFEST_KIND_ATTR: self.kind, # fixme meta class?
