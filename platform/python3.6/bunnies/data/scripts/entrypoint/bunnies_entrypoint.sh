@@ -137,6 +137,7 @@ if [[ -n "${BUNNIES_USER_DEPS}" ]]; then
     else
 	export PYTHONPATH="$PYTHONPATH:$TMPDIR"
     fi
+    export BUNNIES_DEPSDIR="$TMPDIR"
 fi
 
 fetch_and_run_script
