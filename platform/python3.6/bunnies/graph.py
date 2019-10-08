@@ -328,6 +328,26 @@ class Transform(Target, Cacheable):
                 pass
         return None
 
+    def task_resources(self, failures=None, **kwargs):
+        """Return a dictionary of required resources to complete the work.
+
+           The resources can be adjusted based on inputs and job parameters, which
+           are available at the time of the call.
+
+           Additional parameters are provided:
+                 failures := [str, str, str] or None
+                                          list of reasons (str) why this task has failed in the past.
+
+           e.g.:
+
+           {
+               'vcpus': 1,
+               'memory': 4000,
+               'timeout': 4*3600
+           }
+        """
+        raise NotImplementedError("subclasses must implement task_resources")
+
     def ls(self):
         transform_result = self.exists()
         if not transform_result:
