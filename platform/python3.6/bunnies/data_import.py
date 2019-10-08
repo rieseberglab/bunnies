@@ -145,7 +145,7 @@ class DataImport(object):
         new_req["digests"].setdefault("sha1", None)
         new_req["digests"].setdefault("md5", None)
 
-        log.info("%sdata-rehash request: %s", logpad, json.dumps(new_req, sort_keys=True, indent=4, separators=(",", ": ")))
+        log.debug("%sdata-rehash request: %s", logpad, json.dumps(new_req, sort_keys=True, indent=4, separators=(",", ": ")))
         code, response = lambdas.invoke_sync(lambdas.DATA_REHASH, Payload=new_req)
         data = response['Payload'].read().decode("ascii")
         if code != 0:
@@ -154,7 +154,8 @@ class DataImport(object):
         if data_obj.get('error', None):
             raise ImportError("data-rehash returned an error: %s" % (data["results"][0],))
 
-        log.info("%sdata-rehash response: %s", logpad, json.dumps(data_obj, sort_keys=True, indent=4, separators=(",", ": ")))
+        log.debug("%sdata-rehash response: %s", logpad, json.dumps(data_obj, sort_keys=True, indent=4,
+                                                                   separators=(",", ": ")))
 
         return data_obj
 

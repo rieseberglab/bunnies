@@ -19,7 +19,7 @@ from . import constants
 from .utils import data_files
 from . import jobs
 
-logger = logging.getLogger(__package__)
+logger = logging.getLogger(__name__)
 
 
 def get_key_name():
@@ -215,9 +215,9 @@ class FSxDisk(object):
             if resp['NextToken']:
                 kwargs['NextToken'] = resp['NextToken']
 
-            logger.info("listing file systems...")
+            logger.debug("listing file systems...")
             page = client.describe_file_systems(**kwargs)
-            logger.info("retrieved page with %d fs(es) %s", len(page['FileSystems']), page)
+            logger.debug("retrieved page with %d fs(es) %s", len(page['FileSystems']), page)
             matches = [candidate for candidate in page['FileSystems']
                        if _tags_match(self.name, candidate['Tags'])]
             if matches:
@@ -471,7 +471,7 @@ runcmd:
             version_number = 1
         except ClientError as clierr:
             if clierr.response['Error']['Code'] == "InvalidLaunchTemplateName.AlreadyExistsException":
-                logger.info("a template already exists with name %s", lt_name)
+                logger.debug("a template already exists with name %s", lt_name)
                 template = None
             else:
                 logger.error("can't create template %s", lt_name, exc_info=clierr)
@@ -505,7 +505,7 @@ runcmd:
             # find a compute environment which matches the given settings
             paginator = client.get_paginator("describe_compute_environments")
             iterator = paginator.paginate()
-            logger.info("listing compute environments matching %s settings", name)
+            logger.debug("listing compute environments matching %s settings", name)
             found = None
 
             top_level_match = top_level_match if top_level_match else {}
