@@ -177,7 +177,7 @@ setup(
     # executes the function `main` from this package when invoked:
     entry_points={  # Optional
         'console_scripts': [
-            PKGNAME + "=" + PKGNAME + ":main",
+            PKGNAME + "=" + "bunnies.__main__" + ":main",
         ],
     },
 

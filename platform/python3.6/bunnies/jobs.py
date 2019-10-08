@@ -548,7 +548,7 @@ def wait_for_completion(jobs, interval=2*60, num_shown=5):
     return status_map
 
 
-def _test_jobs(**kwargs):
+def _cmd_test_jobs(**kwargs):
     role = config['job_role_arn']
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
 
@@ -568,7 +568,7 @@ def _test_jobs(**kwargs):
     print(result)
 
 
-def _show_job_logs(jobid, **kwargs):
+def _cmd_show_job_logs(jobid, **kwargs):
     import sys
 
     job = AWSBatchSimpleJob.from_job_id(jobid)
@@ -593,37 +593,15 @@ def _show_job_logs(jobid, **kwargs):
         print("total: %6.3fs (%s)" % (from_submit, str(submit_t)))
 
 
-def main():
-    import argparse
-    import sys
-    import bunnies
+def configure_parser(main_subparsers):
+    parser = main_subparsers.add_parser("jobs", help="commands concerning launched jobs")
 
-    bunnies.setup_logging()
-    parser = argparse.ArgumentParser()
-
-    subparsers = parser.add_subparsers(help="sub-command help", dest="command")
+    subparsers = parser.add_subparsers(help="specify an operation on jobs", dest="jobs_command")
 
     subp = subparsers.add_parser("test", help="setup entities needed for launching jobs")
+    subp.set_defaults(func=_cmd_test_jobs)
 
     subp = subparsers.add_parser("logs", help="inspect job logs")
-
+    subp.set_defaults(func=_cmd_show_job_logs)
     subp.add_argument("jobid", metavar="JOBID", type=str, help="the id of the job")
     subp.add_argument("--reverse", action="store_true", default=False, help="show the logs in reverse order")
-
-    args = parser.parse_args(sys.argv[1:])
-
-    if args.command is None:
-        sys.stderr.write("No subcommand specified.\n")
-        sys.stderr.write(parser.format_usage() + "\n")
-        sys.exit(1)
-
-    func = {
-        'test': _test_jobs,
-        'logs': _show_job_logs
-    }[args.command]
-    retcode = func(**vars(args))
-    sys.exit(int(retcode) if retcode is not None else 0)
-
-
-if __name__ == "__main__":
-    main()

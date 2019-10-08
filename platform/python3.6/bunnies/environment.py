@@ -814,45 +814,23 @@ def _delete_env(envname='', **kwargs):
     myenv.wait_deleted()
 
 
-def main():
-    import argparse
-    import sys
-    import bunnies
+def configure_parser(main_subparsers):
+    parser = main_subparsers.add_parser("env", help="commands concerning compute environments")
 
-    bunnies.setup_logging()
-    boto3.set_stream_logger('boto3.resources', logging.INFO)
-
-    parser = argparse.ArgumentParser()
-
-    subparsers = parser.add_subparsers(help="sub-command help", dest="command")
+    subparsers = parser.add_subparsers(help="specify an operation on compute environments", dest="env_command")
 
     subp = subparsers.add_parser("create", help="create a new environment and wait for it to be ready.",
                                  description="Create a new environment and wait for it to be ready. "
                                  "If the environment already exists, the program will wait for it to be"
                                  " ready.")
+    subp.set_defaults(func=_create_env)
     subp.add_argument("envname", metavar="ENVNAME", type=str, help="the name of the new environment")
 
     subp = subparsers.add_parser("delete", help="delete/teardown a compute environment")
+    subp.set_defaults(func=_delete_env)
     subp.add_argument("envname", metavar="ENVNAME", type=str, help="the name of the environment")
 
     subp = subparsers.add_parser("setup", help="setup roles and permissions to support compute environments",
                                  description="This creates the roles and permissions to create compute environments. "
                                  "You would call this once before using the platform, and forget about it.")
-
-    args = parser.parse_args(sys.argv[1:])
-
-    if args.command is None:
-        sys.stderr.write("No subcommand specified.\n")
-        sys.stderr.write(parser.format_usage() + "\n")
-        sys.exit(1)
-
-    func = {
-        'setup': _setup_roles,
-        'create': _create_env,
-        'delete': _delete_env
-    }.get(args.command)
-    retcode = func(**vars(args))
-    sys.exit(int(retcode) if retcode is not None else 0)
-
-if __name__ == "__main__":
-    main()
+    subp.set_defaults(func=_setup_roles)
