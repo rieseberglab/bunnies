@@ -65,6 +65,7 @@ class AWSBatchSimpleJob(object):
 
         self.overrides = overrides
         self.job = None
+        self.job_id = None
 
     @classmethod
     def from_job_id(cls, job_id):
@@ -523,28 +524,37 @@ def describe_jobs(jobs):
     return all_jobs
 
 
-def wait_for_completion(jobs, interval=2*60, num_shown=5):
-    """wait for the given jobs to either be SUCCEEDED, or FAILED.
-       this calls describe_jobs repeatedly.
-    """
-    while True:
-        desc = describe_jobs(jobs)
-        status_map = {}
-        incomplete = 0
-        for job in desc:
-            status_map.setdefault(job['status'], []).append(job['jobId'])
-            if job['status'] not in ('SUCCEEDED', 'FAILED'):
-                incomplete += 1
+def wait_for_jobs(jobs, interval=2*60, condition=None):
+    """wait for the job ids in `jobs` to satisfy some condition
 
-            for status in sorted(status_map.keys()):
-                logger.info("job summary:")
-                logger.info("    %-10s (%-3d): %s ...", status, len(status_map[status]), status_map[status][0:num_shown])
-        if incomplete > 0:
-            logger.info("waiting for %d job(s) to complete (check interval=%ss)...", incomplete, interval)
-            time.sleep(interval)
-            continue
-        # all jobs done (success/failure)
-        break
+       jobs: [ jobid0, jobid1, ... ]
+
+       The returned value is a mapping from job state to the job object val. e.g.:
+       (possible states are SUBMITTED | PENDING | RUNNABLE | STARTING | RUNNING | SUCCEEDED | FAILED)
+            {
+                'SUCCESS': [ (jobid0, reason), (jobid1, reason) ],
+                'FAILED': [(jobid2, reason)],
+                ...
+            }
+    """
+    if not condition:
+        def condition(x): return True
+
+    job_ids = [jobid for jobid in jobs]
+    while True:
+        desc = describe_jobs(job_ids)
+        status_map = {}
+        for job in desc:
+            if not job['status'] in status_map:
+                status_map[job['status']] = []
+            status_map[job['status']].append((job['jobId'], job.get('statusReason', '')))
+
+        if condition(status_map):
+            break
+
+        time.sleep(interval)
+        continue
+
     return status_map
 
 

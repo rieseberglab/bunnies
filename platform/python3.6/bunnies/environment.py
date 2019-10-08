@@ -322,7 +322,7 @@ class ComputeEnv(object):
         self.disks = {}
         self.launch_template = None
         self.batch_ce = None
-        self.submissions = [] # result of submit_job
+        self.submissions = {} # job_name: submitted_job_obj
         self.job_definitions = {} # keyed by (name, image)
 
         if scratch_size_gb > 0:
@@ -340,10 +340,13 @@ class ComputeEnv(object):
         return self.job_definitions[(name, container_image)]
 
     def submit_simple_batch_job(self, job_name, job_def, **job_params):
+        if job_name in self.submissions:
+            raise ValueError("a job with that name has already been submitted: %s", job_name)
+
         job_obj = jobs.AWSBatchSimpleJob(job_name, job_def, **job_params)
         queue_arn = self.job_queue['jobQueueArn']
-        submission = job_obj.submit(queue_arn)
-        self.submissions.append(submission)
+        job_obj.submit(queue_arn)
+        self.submissions[job_name] = job_obj
 
     def get_disk(self, diskname):
         if diskname in self.disks:
@@ -647,10 +650,57 @@ runcmd:
         wait_batch_ce_ready([self.batch_ce['computeEnvironmentName']])
         jobs.wait_queue_ready([self.job_queue['jobQueueArn']])
 
-    def wait_for_jobs(self):
-        for sub in self.submissions:
-            print(repr(sub))
-        return jobs.wait_for_completion([sub for sub in self.submissions])
+    def wait_for_jobs(self, condition=None, interval=2*60):
+        """
+        poll submitted jobs repeatedly (every `interval` seconds), until a condition is satisfied.
+
+        condition(status_map) -> bool   (True if and only if the condition is satisfied)
+        status_map is a dictionary of job states:
+
+        {
+         "SUBMITTED": [ (id0, reason),  (id1, reason), (id2, reason) ],
+         ...
+        }
+
+        each key is a state in the set SUBMITTED | PENDING | RUNNABLE | STARTING | RUNNING | SUCCEEDED | FAILED
+        each value is a list of AWS job ids and associated statusReason. states are omitted if there are no jobs
+        in that state.
+
+        the return value of this call is the same as the status_map, but with job objects instead of submissionids.
+        """
+
+        id_map = {obj.job_id: obj for obj in self.submissions.values()}
+
+        if not condition:
+            def condition(status_map):
+                return True
+
+        for job_name, job_obj in self.submissions.items():
+            logger.debug("waiting for job name=%s job_id=%s", job_name, job_obj.job_id)
+
+        if self.submissions:
+            id_status = jobs.wait_for_jobs([job_id for job_id in id_map], condition=condition, interval=interval)
+
+            # convert Ids back into job objects
+            obj_status = {}
+            for state in id_status:
+                obj_status[state] = [(id_map[job_id], reason) for (job_id, reason) in id_status[state]]
+
+            # clear submitted jobs from list of submissions.
+            #
+            # XXX Rather than rely on self.submissions, we could retrieve the list of all jobs associated with the
+            #     compute environment.  But we risk removing jobs that were run by a different process under a compute
+            #     environment of the same name.
+            completed = obj_status.get('SUCCEEDED', []) + obj_status.get('FAILED', [])
+            if len(completed) > 0:
+                logger.debug("clearing %d submission(s)...", len(completed))
+            for (job_obj, status) in completed:
+                del self.submissions[job_obj.name]
+
+            return obj_status
+
+        else:
+            return {}
 
     def wait_deleted(self):
         """ensure all the entities are deleted completely"""
