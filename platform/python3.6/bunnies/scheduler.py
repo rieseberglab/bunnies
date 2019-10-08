@@ -2,11 +2,14 @@
 
 from collections import OrderedDict
 
+
 class SchedError(Exception):
     pass
 
+
 class SchedStateError(SchedError):
     pass
+
 
 class SchedNode(object):
     """
@@ -19,15 +22,16 @@ class SchedNode(object):
     node back in ready state (this allows retries). it needs to be explitly
     cancelled to be considered fatal.
     """
-    __slots__ = ("uid", "sched", "state", "failures", "deps", "rdeps")
+    __slots__ = ("uid", "sched", "state", "failures", "deps", "rdeps", "data")
 
-    def __init__(self, uid, sched):
+    def __init__(self, uid, sched, data):
         self.uid = uid
         self.sched = sched
         self.state = 'waiting'  # waiting, ready, done, cancelled, submitted
         self.failures = []
         self.deps = {}
         self.rdeps = {}
+        self.data = data
 
     def __str__(self):
         return "N(%s)" % (self.uid,)
@@ -119,6 +123,7 @@ class SchedNode(object):
         self.state = 'cancelled'
         self.cascade()
 
+
     # def __cmp__(self, other):
     #     if not other:
     #         return -1
@@ -164,10 +169,13 @@ class Scheduler(object):
             for leaf in get_leaves(node, visited):
                 leaf.cascade()
 
-    def add_node(self, uid):
+    def add_node(self, uid, data=None):
         if uid not in self.nodes:
-            self.nodes[uid] = SchedNode(uid, self)
+            self.nodes[uid] = SchedNode(uid, self, data)
         return self.nodes[uid]
+
+    def get_node(self, uid):
+        return self.nodes.get(uid, None)
 
     def enqueue(self, node):
         if node.uid in self.ready:
