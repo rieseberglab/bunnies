@@ -347,6 +347,7 @@ class ComputeEnv(object):
         queue_arn = self.job_queue['jobQueueArn']
         job_obj.submit(queue_arn)
         self.submissions[job_name] = job_obj
+        return job_obj
 
     def get_disk(self, diskname):
         if diskname in self.disks:

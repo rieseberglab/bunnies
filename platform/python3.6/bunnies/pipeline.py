@@ -35,7 +35,7 @@ class PipelineException(Exception):
 
 class BuildNode(object):
     """graph of buildable things with dependencies"""
-    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef", "_sched_node")
+    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef", "_sched_node", "_submit_node")
 
     def __init__(self, data):
         self.data = data  # Cacheable
@@ -44,6 +44,7 @@ class BuildNode(object):
         self._output_ready = None
         self._jobdef = None
         self._sched_node = None
+        self._submit_node = None
 
     @property
     def uid(self):
@@ -115,6 +116,8 @@ class BuildNode(object):
             scheduler_node.cancel()
             return
 
+        assert self._submit_node is None
+
         # this id is globally unique
         job_id = self.job_id
 
@@ -156,7 +159,8 @@ class BuildNode(object):
         if settings.get('timeout') <= 0:
             settings['timeout'] = 24*3600*7 # 7 days
 
-        compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
+        submission = compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
+        self._submit_node = submission
         scheduler_node.submit()
         return
 
@@ -363,6 +367,7 @@ class BuildGraph(object):
 
         compute_env = ComputeEnv(run_name)
 
+        nodei = -1
         for nodei, node in enumerate(self.build_order()):
             # check compatibility with compute_environment
             # wrap container images.
@@ -398,9 +403,9 @@ class BuildGraph(object):
         def _print_execution_status(status_map):
             num_shown = 5
             for status in sorted(status_map.keys()):
-                log.info("execution summary:")
+                log.info("compute environment summary:")
                 job_summary = [job_id for (job_id, _) in status_map[status][0:num_shown]]
-                log.info("    %-10s (%-3d): %s ...", status, len(status_map[status]), job_summary)
+                log.info("    %-10s (%-3d): %s ...", status.lower(), len(status_map[status]), job_summary)
 
         def _wait_for_all_jobs(status_map):
             """we're waiting for all submitted jobs to complete (success/failure)"""
@@ -429,6 +434,7 @@ class BuildGraph(object):
 
             if not (status['ready'] or status['waiting'] or status['submitted']):
                 # all done
+                log.info("schedule complete")
                 break
 
             # process ready nodes
@@ -442,27 +448,38 @@ class BuildGraph(object):
 
             log.info("job state summary:")
             for state_name in sorted(status.keys()):
-                log.info("    %-11s: %d job(s)", repr(state_name), len(status[state_name]))
+                log.info("    %-10s: %d job(s)", state_name, len(status[state_name]))
 
             if status['submitted']:
                 # check for status of completed jobs
-                job_completion = compute_env.wait_for_jobs(condition=_wait_for_some_jobs)
+                exec_completion = compute_env.wait_for_jobs(condition=_wait_for_some_jobs)
 
-                success_jobs = job_completion.get('SUCCEEDED', [])
+                success_jobs = exec_completion.get('SUCCEEDED', [])
                 for update_job, _ in success_jobs:
                     sched_node = self.scheduler.get_node(update_job.name)
                     sched_node.done()
 
-                failed_jobs = job_completion.get('FAILED', [])
+                failed_jobs = exec_completion.get('FAILED', [])
                 for update_job, update_reason in failed_jobs:
                     sched_node = self.scheduler.get_node(update_job.name)
                     sched_node.failed(update_reason)
 
         if status['cancelled']:
-            raise exc.BuildException("One or more jobs failed to build.")
+            failed_build_nodes = [cancelled.data for cancelled in status['cancelled']
+                                  if len(cancelled.failures) > 0]
+            if failed_build_nodes:
+                log.info("failed jobs (%3d):", len(failed_build_nodes))
+                for failed_node in failed_build_nodes:
+                    log.info("    job_id=%s name=%s reasons=%s",
+                             failed_node._submit_node.job_id, failed_node.job_id,
+                             failed_node._sched_node.failures)
+
+            raise exc.BuildException("one or more targets failed to build")
+        else:
+            log.info("all targets were successfully built")
 
 
-def build_target(roots):
+def build_pipeline(roots):
     """
     Construct a pipeline execution schedule from a graph of
     data dependencies.
