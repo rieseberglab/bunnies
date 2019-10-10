@@ -247,6 +247,14 @@ def create_job_role():
                     "Service": "ecs-tasks.amazonaws.com"
                 },
                 "Action": "sts:AssumeRole"
+            },
+            {
+                "Sid": "",
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "ecs.amazonaws.com"
+                },
+                "Action": "sts:AssumeRole"
             }
         ]
     }
