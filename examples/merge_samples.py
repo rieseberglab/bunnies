@@ -17,12 +17,15 @@ from snpcalling import InputFile, Align, Merge
 bunnies.setup_logging(logging.INFO)
 
 bunnies.runtime.add_user_deps(".", "snpcalling", excludes=("__pycache__"))
+bunnies.runtime.add_user_deps(".", "scripts")
 bunnies.runtime.add_user_hook("import snpcalling")
 bunnies.runtime.add_user_hook("snpcalling.setup_logging()")
 
+# Reference genome
 ha412     = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta")
 ha412_idx = InputFile("s3://rieseberg-references/HA412/genome/Ha412HOv2.0-20181130.fasta.fai")
 
+# Align files
 a1 = Align(
     sample_name="ANN0830",
     r1=InputFile("https://github.com/rieseberglab/fastq-examples/raw/master/data/HI.4038.002.index_10.ANN0830_R1.fastq.gz",
@@ -50,6 +53,7 @@ a3 = Align(
     ref=ha412,
     ref_idx=ha412_idx)
 
+# Transform objects form a graph
 all_bams = [a1, a2, a3]
 
 # merge them by key
@@ -60,7 +64,7 @@ all_merged = [merged_bam1, merged_bam2]
 
 # - fixates software versions and parameters
 # - creates graph of dependencies
-pipeline = bunnies.build_target(all_merged)
+pipeline = bunnies.build_pipeline(all_merged)
 
 # TODO - a URL where we can see details and progress in the browser (maybe via lambda+apigateway)
 # print(pipeline.dashboard_url())
@@ -69,3 +73,6 @@ pipeline = bunnies.build_target(all_merged)
 # Tag all entities with the name of the program
 #
 pipeline.build(os.path.basename(__file__))
+
+for target in pipeline.targets:
+    print(target.data.exists())

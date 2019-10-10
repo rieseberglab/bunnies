@@ -18,7 +18,7 @@ from . import constants
 from . import execute
 
 from .graph import S3Blob, Transform, ExternalFile
-from .pipeline import build_target
+from .pipeline import build_pipeline
 from .data_import import DataImport
 from .environment import ComputeEnv
 from .utils import run_cmd
