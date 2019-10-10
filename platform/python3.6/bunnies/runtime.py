@@ -9,6 +9,8 @@ import logging
 import shutil
 import tempfile
 import zipfile
+import boto3
+import requests
 
 from .utils import get_blob_ctx, walk_tree, run_cmd
 from .exc import NoSuchFile
@@ -72,6 +74,65 @@ def add_user_hook(python_code):
 add_user_hook._hooks = []
 
 
+def setenv_batch_metadata():
+    """run this from inside an AWS batch container job to define
+       additional environment variables about the job's placement
+    """
+    if not os.environ.get("AWS_BATCH_JOB_ID", None):
+        return
+    batch_job_id = os.environ.get("AWS_BATCH_JOB_ID")
+    batch = boto3.client('batch')
+    job_descs = batch.describe_jobs(
+            jobs=[batch_job_id]
+    )['jobs']
+    if not job_descs:
+        return
+
+    # look at container envelope in batch job
+    job_desc = job_descs[0]
+    this_container = job_desc.get('container', {})
+    this_container_instance = this_container.get("containerInstanceArn", "")
+    this_task_arn = this_container.get('taskArn', "")
+    os.environ["BUNNIES_TASK_ARN"] = this_task_arn
+    os.environ["BUNNIES_CONTAINER_INSTANCE_ARN"] = this_container_instance
+
+    instance_id = requests.get("http://169.254.169.254/latest/meta-data/instance-id").text
+    instance_type = requests.get("http://169.254.169.254/latest/meta-data/instance-type").text
+    os.environ["BUNNIES_EC2_INSTANCE_ID"] = instance_id
+    os.environ["BUNNIES_EC2_INSTANCE_TYPE"] = instance_type
+
+    # get ecs cluster
+    ecs_container_metadata_uri = os.environ.get("ECS_CONTAINER_METADATA_URI", "")
+    ecs_cluster = None
+    if ecs_container_metadata_uri:
+        container_metadata = requests.get(ecs_container_metadata_uri).json()
+        labels = container_metadata.get("Labels", {})
+        ecs_cluster = labels.get("com.amazonaws.ecs.cluster", None)
+        os.environ["BUNNIES_ECS_CLUSTER"] = ecs_cluster
+
+        # Limits.CPU is in units of 1024/vcpu
+        os.environ["BUNNIES_RES_VCPU"] = str((container_metadata['Limits']['CPU'] + 1023) // 1024)
+
+        # MB
+        os.environ["BUNNIES_RES_MEMORY"] = str(container_metadata['Limits']['Memory'])
+        # log.info("container metadata: %s", container_metadata)
+
+    # bunnies-ecs-instance-role
+    # security_creds = requests.get("http://169.254.169.254/latest/meta-data/iam/security-credentials/").text
+    # log.info("security creds: %s", security_creds)
+
+    # ec2 = boto3.client('ec2')
+    # instances = ec2.describe_instances(
+    #     InstanceIds=[instance_id])
+    # if not instances or not instances['Reservations']:
+    #     return
+    # res = instances['Reservations'][0]
+    # if not res['Instances']:
+    #     return
+    # instance_info = res['Instances'][0]
+    # log.info("instance info: %s", instance_info)
+
+
 def update_result(result_url, logprefix="", **kwargs):
     """update job results file"""
 
@@ -84,7 +145,7 @@ def update_result(result_url, logprefix="", **kwargs):
     except NoSuchFile:
         result = {}
 
-    for field in ('output', 'log', 'usage', 'manifest', 'output'):
+    for field in ('output', 'log', 'usage', 'manifest', 'output', 'canonical', 'environment'):
         if field in kwargs:
             result[field] = kwargs.get(field)
 
