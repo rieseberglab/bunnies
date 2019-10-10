@@ -231,7 +231,7 @@ def s3_download_file(inputurl, outputpath, logprefix=""):
     # this downloads it to a temp file
     s3.download_file(bucketname, keyname, outputpath)
     st_size = os.stat(outputpath).st_size
-    log.info("%sdownloaded... %s (%.3fMiB)", logprefix, outputpath, st_size / (1024 * 1024))
+    log.info("%sdownloaded %s (%.3fMiB)", logprefix, outputpath, st_size / (1024 * 1024))
     return outputpath
 
 
