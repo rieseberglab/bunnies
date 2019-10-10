@@ -302,10 +302,11 @@ class Transform(Target, Cacheable):
             self._canonical_id = super(Transform, self).canonical_id
         return self._canonical_id
 
-    def output_prefix(self):
-        build_bucket = config['storage']['build_bucket']
-        return "s3://%(bucket)s/%(cid)s/" % {
-            'bucket': build_bucket,
+    def output_prefix(self, bucket=None):
+        bucket = bucket or config['storage']['build_bucket']
+        return "s3://%(bucket)s/%(name)s-%(cid)s/" % {
+            'name': self.name,
+            'bucket': bucket,
             'cid': self.canonical_id
         }
 
@@ -314,12 +315,10 @@ class Transform(Target, Cacheable):
         check if the results of the transformation exist
         """
         buckets = [config['storage']['build_bucket']]
-        canonical_id = self.canonical_id
         for bucket in buckets:
             try:
-                candidate = "s3://%(bucket)s/%(cid)s/%(result)s" % {
-                    'bucket': bucket,
-                    'cid': canonical_id,
+                candidate = "%(prefix)s%(result)s" % {
+                    'prefix': self.output_prefix(bucket),
                     'result': constants.TRANSFORM_RESULT_FILE
                 }
                 _ = utils.get_blob_meta(candidate, logprefix=self.kind)
