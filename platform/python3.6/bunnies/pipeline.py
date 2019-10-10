@@ -203,7 +203,10 @@ canonical_obj = json.loads(canonical_s)
 
 bunnies.setup_logging()
 
+# this is for align binaries
 os.environ['AWS_REGION'] = %(default_region)s
+# this is for the boto client
+os.environ['AWS_DEFAULT_REGION'] = %(default_region)s
 
 transform = unmarshall(manifest_obj)
 log.info("%%s", json.dumps(manifest_obj, indent=4))
@@ -215,27 +218,19 @@ params = {
         'resources': %(resources_s)s
         }
 
+bunnies.runtime.setenv_batch_metadata()
+env_copy = dict(os.environ)
+
+# core of the work
 output = transform.run(**params)
 
+# write results
 result_path = os.path.join(transform.output_prefix(), C.TRANSFORM_RESULT_FILE)
-bunnies.runtime.update_result(result_path, output=output, manifest=manifest_obj, canonical=canonical_obj)
-
-#
-# result file -- if this file exists, the transform has completed successfully
-# and _all_ of its outputs have been successfully saved)
-#
-# {
-#   'manifest': {...},
-#   'canonical': {...},
-#   'output': {
-#        'my_output1': "s3://path/to/file" || "./relative_path_to_file"
-#   },
-#   'log': ["url to raw log file"]
-#   'usage': "url to resource usage statistics file"
-# }
-#
-#TRANSFORM_RESULT_FILE = "transform-result.json"
-
+bunnies.runtime.update_result(result_path,
+        output=output,
+        manifest=manifest_obj,
+        canonical=canonical_obj,
+        environment=env_copy)
 """ % {
     'manifest_s': manifest_s,
     'canonical_s': canonical_s,
