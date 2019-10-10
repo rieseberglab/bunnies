@@ -192,6 +192,31 @@ def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_lengt
                           (bucketname, keyname, clierr.response['Error']['Code']))
 
 
+def s3_upload_file(inputpath, outputurl, logprefix="", content_type=None, content_encoding=None, **extra):
+    """upload the given local file to the s3 url given"""
+    bucketname, keyname = utils.s3_split_url(outputurl)
+    if not keyname:
+        log.error("%s empty key given", logprefix)
+        raise ValueError("empty key given")
+    if logprefix:
+        logprefix += " "
+
+    log.info("%suploading %s => %s", logprefix, inputpath, outputurl)
+    s3 = boto3.client('s3')
+    # this downloads it to a temp file
+    extra_args = {
+        "ContentType": content_type or "application/octet-stream"
+    }
+    if content_encoding:
+        extra_args['ContentEncoding'] = content_encoding
+    extra_args.update(extra)
+
+    s3.upload_file(inputpath, bucketname, keyname, ExtraArgs=extra_args)
+    st_size = os.stat(inputpath).st_size
+    log.info("%suploaded %s (%.3fMiB)", logprefix, inputpath, st_size / (1024 * 1024))
+    return outputurl
+
+
 def s3_download_file(inputurl, outputpath, logprefix=""):
     """download the given s3 url to the pathname given"""
     bucketname, keyname = utils.s3_split_url(inputurl)
