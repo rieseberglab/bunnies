@@ -109,7 +109,7 @@ class AWSBatchSimpleJob(object):
         )['jobs'][0]
 
         if not job_desc['attempts']:
-            logger.debug("job-desc: %s", job_desc)
+            #logger.debug("no attempts: %s", job_desc)
             return None
 
         attempt = job_desc['attempts'][attempt]
@@ -132,11 +132,17 @@ class AWSBatchSimpleJob(object):
         )['jobs'][0]
 
         if not job_desc['attempts']:
-            logger.info("no job attempts: %s", job_desc)
-            return
+            if attempt != -1:
+                return
+            container_logs = job_desc['container'].get('logStreamName', "")
+            if not container_logs:
+                return
+            logger.debug("attempt is in progress...: %s", container_logs)
+        else:
+            attempt = job_desc['attempts'][attempt]
+            container_logs = attempt['container']['logStreamName']
+            logger.debug("showing logs for completed attempt...: %s", container_logs)
 
-        attempt = job_desc['attempts'][attempt]
-        container_logs = attempt['container']['logStreamName']
         # containerInstanceArn would likely allow obtaining logs for the instance.
 
         client = boto3.client('logs')
@@ -150,12 +156,18 @@ class AWSBatchSimpleJob(object):
 
         extra['startFromHead'] = startFromHead
 
-        token=None
         tokenKey = 'nextForwardToken' if startFromHead else 'nextBackwardToken'
-        events = ['_']
+
         while True:
-            resp = client.get_log_events(logGroupName=log_group_name, logStreamName=container_logs,
-                                         **extra)
+            try:
+                resp = client.get_log_events(logGroupName=log_group_name, logStreamName=container_logs,
+                                             **extra)
+            except ClientError as clierr:
+                if clierr.response['Error']['Code'] == 'ResourceNotFoundException':
+                    return
+                else:
+                    raise
+
             if not resp['events']:
                 return
 
@@ -163,6 +175,7 @@ class AWSBatchSimpleJob(object):
                 yield event
 
             extra["nextToken"] = resp[tokenKey]
+
 
 def _custom_waiters():
     if not _custom_waiters.model:
@@ -235,6 +248,8 @@ _custom_waiters.model = None
 
 
 def create_job_role():
+    """role assumed by batch (ecs) jobs"""
+
     ecs_role_name = PLATFORM + "-ecs"
 
     jobs_ecs_trust = {
@@ -591,7 +606,7 @@ def _cmd_show_job_logs(jobid, **kwargs):
 
     job = AWSBatchSimpleJob.from_job_id(jobid)
     if not job:
-        sys.stderr.write("no logs found for job id %s\n" % (jobid,))
+        sys.stderr.write("job not found %s\n" % (jobid,))
         return 1
 
     def _get_time(ms):
@@ -600,15 +615,18 @@ def _cmd_show_job_logs(jobid, **kwargs):
     for event in job.log_stream(startFromHead=True):
         print(_get_time(event['timestamp']), event['message'])
 
-    if True:
-        status = job.get_status()
-        secs = (status.get('stoppedAt', 0) - status.get('startedAt', 0)) / 1000.0
-        from_submit = (status.get('stoppedAt', 0) - status.get('createdAt', 0)) / 1000.0
-        run_t = timedelta(seconds=secs)
-        submit_t = timedelta(seconds=from_submit)
-        print("exited with code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
-        print("runtime: %6.3fs (%s)" % (secs, str(run_t)))
-        print("total: %6.3fs (%s)" % (from_submit, str(submit_t)))
+    status = job.get_status()
+    if not status:
+        sys.stderr.write("job exists, but has no logs to show\n")
+        return 1
+
+    secs = (status.get('stoppedAt', 0) - status.get('startedAt', 0)) / 1000.0
+    from_submit = (status.get('stoppedAt', 0) - status.get('createdAt', 0)) / 1000.0
+    run_t = timedelta(seconds=secs)
+    submit_t = timedelta(seconds=from_submit)
+    print("exited with code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
+    print("runtime: %6.3fs (%s)" % (secs, str(run_t)))
+    print("total: %6.3fs (%s)" % (from_submit, str(submit_t)))
 
 
 def configure_parser(main_subparsers):
