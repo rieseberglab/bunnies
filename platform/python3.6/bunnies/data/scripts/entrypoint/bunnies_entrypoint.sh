@@ -108,7 +108,7 @@ fetch_and_run_script () {
   env
 
   : container metadata
-  curl -sv -o - "${ECS_CONTAINER_METADATA_URI}" || :
+  curl -s -o - "${ECS_CONTAINER_METADATA_URI}" || :
   echo # flush line
 
   (
