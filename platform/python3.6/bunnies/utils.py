@@ -284,3 +284,40 @@ def run_cmd(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, lo
     if check:
         proc.check_returncode()
     return proc
+
+
+def read_log_stream(log_group_name, stream_name, startTime=None, endTime=None, startFromHead=False):
+    """yields each log event of the job,
+       startTime and endTime are in ms.
+    """
+    # containerInstanceArn would likely allow obtaining logs for the instance.
+
+    client = boto3.client('logs')
+
+    extra = {}
+    if startTime is not None:
+        extra['startTime'] = startTime
+    if endTime is not None:
+        extra['endTime'] = endTime
+
+    extra['startFromHead'] = startFromHead
+
+    tokenKey = 'nextForwardToken' if startFromHead else 'nextBackwardToken'
+
+    while True:
+        try:
+            resp = client.get_log_events(logGroupName=log_group_name, logStreamName=stream_name,
+                                         **extra)
+        except ClientError as clierr:
+            if clierr.response['Error']['Code'] == 'ResourceNotFoundException':
+                return
+            else:
+                raise
+
+        if not resp['events']:
+            return
+
+        for event in resp['events']:
+            yield event
+
+        extra["nextToken"] = resp[tokenKey]

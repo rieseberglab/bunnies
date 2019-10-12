@@ -5,15 +5,18 @@
 """
 from . import runtime
 from . import exc
+from . import constants
 from .graph import Cacheable, Transform, Target
 from .environment import ComputeEnv
 from .transfers import s3_streaming_put
 from .config import config
 from .scheduler import Scheduler
 
+from datetime import datetime
 import json
 import logging
 import io
+import os.path
 
 log = logging.getLogger(__name__)
 
@@ -150,9 +153,11 @@ class BuildNode(object):
             'memory': resources.get('memory', None),
             'timeout': resources.get('timeout', -1),
             'environment': {
+                "BUNNIES_SUBMIT_TIME": str(int(datetime.utcnow().timestamp()*1000)),
                 "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                 "BUNNIES_USER_DEPS": user_deps_url,
                 "BUNNIES_JOBID": job_id,
+                "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE)
             }
         }
 

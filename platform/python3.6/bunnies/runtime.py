@@ -100,6 +100,7 @@ def setenv_batch_metadata():
     instance_type = requests.get("http://169.254.169.254/latest/meta-data/instance-type").text
     os.environ["BUNNIES_EC2_INSTANCE_ID"] = instance_id
     os.environ["BUNNIES_EC2_INSTANCE_TYPE"] = instance_type
+    log.info("running on instance %s (type %s)", instance_id, instance_type)
 
     # get ecs cluster
     ecs_container_metadata_uri = os.environ.get("ECS_CONTAINER_METADATA_URI", "")
