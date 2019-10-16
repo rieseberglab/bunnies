@@ -6,6 +6,7 @@
 from . import runtime
 from . import exc
 from . import constants
+from .version import __version__
 from .graph import Cacheable, Transform, Target
 from .environment import ComputeEnv
 from .transfers import s3_streaming_put
@@ -164,6 +165,7 @@ class BuildNode(object):
             'memory': resources.get('memory', None),
             'timeout': resources.get('timeout', -1),
             'environment': {
+                "BUNNIES_VERSION": __version__,
                 "BUNNIES_SUBMIT_TIME": str(int(datetime.utcnow().timestamp()*1000)),
                 "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                 "BUNNIES_USER_DEPS": user_deps_url,

@@ -19,6 +19,7 @@ from . import transfers
 from . import constants
 from .config import active_config_files
 from . import data_import
+from .version import __version__
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,8 @@ def update_result(result_url, logprefix="", **kwargs):
     except NoSuchFile:
         result = {}
 
+    ## overwrite version field
+    result["platform_version"] = __version__
     for field in ('output', 'log', 'usage', 'manifest', 'output', 'canonical', 'environment'):
         if field in kwargs:
             result[field] = kwargs.get(field)
