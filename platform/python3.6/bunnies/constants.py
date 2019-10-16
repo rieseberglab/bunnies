@@ -40,4 +40,6 @@ MANIFEST_KIND_ATTR = "_kind"
 #   'usage': "url to resource usage statistics file"
 # }
 #
-TRANSFORM_RESULT_FILE = "transform-result.json"
+TRANSFORM_RESULT_FILE = PLATFORM + ".transform-result.json"
+JOB_USAGE_FILE = PLATFORM + ".usage.json"
+JOB_LOGS_PREFIX = PLATFORM + ".job."
