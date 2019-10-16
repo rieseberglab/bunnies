@@ -2,11 +2,11 @@
 
 import boto3
 from .constants import PLATFORM, JOB_LOGS_PREFIX, JOB_USAGE_FILE
-from .utils import data_files, read_log_stream, get_blob_meta
+from .utils import data_files, read_log_stream, get_blob_meta, hash_data
 from .containers import wrap_user_image
 from .config import config
 from .exc import BunniesException, NoSuchFile
-from .transfers import s3_streaming_put
+from .transfers import s3_streaming_put, s3_streaming_put_simple
 
 import os
 import json
@@ -137,8 +137,11 @@ class AWSBatchSimpleJob(object):
            if the destination url is omitted, it is extracted from the bunnies output directory for
            the job.
 
-           If the usage information cannot be obtained completely, None is returned. In this case,
-           the upload is skipped if the destination file already exists.
+           Returns:
+                usage_url, usage_info, is_written
+
+           is_written is True if the usage information was written to usage_url
+           (if the usage information already exists, we avoid overwriting if the usage information retrieved is incomplete)
         """
         job_desc = self._get_desc()
         if not job_desc:
@@ -151,9 +154,17 @@ class AWSBatchSimpleJob(object):
                 raise BunniesException("no location to save logs could be determined from the environment")
             dest_url = os.path.split(result_var[0]['value'])[0]
 
+        def _attempt_has_instance_info(attempt):
+            if not attempt or not attempt['instance']:
+                return False
+            for instance_info in attempt['instance']:
+                if not instance_info or not instance_info.get('instanceType', None):
+                    return False
+            return True
+
         usage = self.get_usage()
         no_instance_info = [attempt for attempt in usage['attempts']
-                            if attempt['instance'] is None or attempt['instance']['instanceType'] is None]
+                            if not _attempt_has_instance_info(attempt)]
 
         # avoid race
         if no_instance_info:
@@ -168,16 +179,19 @@ class AWSBatchSimpleJob(object):
             try:
                 _ = get_blob_meta(logdest)
                 logger.info("usage information already present. leaving as-is.")
-                return None
+                return logdest, usage, False
             except NoSuchFile:
                 pass
 
         with io.BytesIO() as usage_fp:
-            write_len = usage_fp.write(json.dumps(usage, indent=4).encode('utf-8'))
+            data = json.dumps(usage, indent=4).encode('utf-8')
+            cmd5 = hash_data(data, encoding="hex", algo="md5")
+            write_len = usage_fp.write(data)
             usage_fp.seek(0)
-            s3_streaming_put(usage_fp, logdest, content_type="application/json", content_length=write_len,
-                             logprefix=os.path.basename(logdest))
-        return dest_url
+            s3_streaming_put_simple(usage_fp, logdest, content_md5=cmd5,
+                                    content_type="application/json", content_length=write_len,
+                                    logprefix=os.path.basename(logdest))
+        return logdest, usage, True
 
     def save_logs(self, dest_url=None):
         """saves all job logs for all attempts in the folder designated by dest_url prefix (s3 folder).
@@ -844,8 +858,8 @@ def _cmd_save_job_usage(jobid, **kwargs):
         sys.stderr.write("job not found %s\n" % (jobid,))
         return 1
 
-    dest = job.save_usage()
-    print("usage saved:")
+    dest, _, _ = job.save_usage()
+    print("usage in:")
     print(" ", dest)
 
 

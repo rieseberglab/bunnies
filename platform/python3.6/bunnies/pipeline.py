@@ -102,7 +102,7 @@ class BuildNode(object):
         """
         logs_dir = self.data.output_prefix()
         self._job.save_logs(dest_url=logs_dir)
-        run_usage = self._job.get_usage()
+        _, run_usage, _ = self._job.save_usage(dest_url=logs_dir)
         self._usage.append(run_usage)
 
     def register_job_definition(self, compute_env):

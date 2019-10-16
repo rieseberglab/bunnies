@@ -148,6 +148,16 @@ def get_blob_ctx(objecturl, logprefix=""):
     return StreamingBodyCtx(res)
 
 
+def hash_data(data, algo='md5', encoding="hex"):
+    digest_obj = getattr(hashlib, algo)()
+    digest_obj.update(data)
+    if encoding in ("hex", "hexdigest", 16):
+        return digest_obj.hexdigest()
+    elif encoding in ("base64", "b64", 64):
+        return base64.b64encode(digest_obj.digest()).decode('ascii')
+    return digest_obj
+
+
 def canonical_hash(canon_obj, algo='sha1'):
     """hash a canonical dictionary representation into a hexdigest.
 
