@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+
 import boto3
-from .constants import PLATFORM
-from .utils import data_files, read_log_stream
+from .constants import PLATFORM, JOB_LOGS_PREFIX, JOB_USAGE_FILE
+from .utils import data_files, read_log_stream, get_blob_meta
 from .containers import wrap_user_image
 from .config import config
-from .exc import BunniesException
+from .exc import BunniesException, NoSuchFile
 from .transfers import s3_streaming_put
 
 import os
@@ -72,8 +73,10 @@ class AWSBatchSimpleJob(object):
         self.job = None
         self.job_id = None
 
-    def _get_desc(self):
-        client = boto3.client('batch')
+    def _get_desc(self, client=None):
+        if client is None:
+            client = boto3.client('batch')
+
         jobs = client.describe_jobs(
             jobs=[self.job_id]
         )
@@ -129,8 +132,58 @@ class AWSBatchSimpleJob(object):
         attempt['createdAt'] = job_desc['createdAt']
         return attempt
 
+    def save_usage(self, dest_url=None):
+        """extracts usage information and saves it in the folder designateg by dest_url (s3 folder)
+           if the destination url is omitted, it is extracted from the bunnies output directory for
+           the job.
+
+           If the usage information cannot be obtained completely, None is returned. In this case,
+           the upload is skipped if the destination file already exists.
+        """
+        job_desc = self._get_desc()
+        if not job_desc:
+            raise BunniesException("cannot retrieve job information %s" % (self.job_id,))
+
+        if dest_url is None:
+            job_env = job_desc['container']['environment']
+            result_var = [var for var in job_env if var['name'] == "BUNNIES_RESULT"]
+            if not result_var:
+                raise BunniesException("no location to save logs could be determined from the environment")
+            dest_url = os.path.split(result_var[0]['value'])[0]
+
+        usage = self.get_usage()
+        no_instance_info = [attempt for attempt in usage['attempts']
+                            if attempt['instance'] is None or attempt['instance']['instanceType'] is None]
+
+        # avoid race
+        if no_instance_info:
+            overwrite = False
+        else:
+            overwrite = True
+
+        logdest = os.path.join(dest_url, JOB_USAGE_FILE)
+
+        if not overwrite:
+            # FIXME there's a race condition here. we want put with O_CREAT | O_EXCL.
+            try:
+                _ = get_blob_meta(logdest)
+                logger.info("usage information already present. leaving as-is.")
+                return None
+            except NoSuchFile:
+                pass
+
+        with io.BytesIO() as usage_fp:
+            write_len = usage_fp.write(json.dumps(usage, indent=4).encode('utf-8'))
+            usage_fp.seek(0)
+            s3_streaming_put(usage_fp, logdest, content_type="application/json", content_length=write_len,
+                             logprefix=os.path.basename(logdest))
+        return dest_url
+
     def save_logs(self, dest_url=None):
-        """saves all job logs for all attempts in the folder designated by dest_url (s3 folder)"""
+        """saves all job logs for all attempts in the folder designated by dest_url prefix (s3 folder).
+           if the destination url is omitted, it is extracted from the bunnies output directory for the
+           job
+        """
         job_desc = self._get_desc()
         if not job_desc:
             raise BunniesException("cannot retrieve job information %s" % (self.job_id,))
@@ -161,10 +214,10 @@ class AWSBatchSimpleJob(object):
             containers = _get_containers(attempt)
             for details in containers:
                 if attempti == len(job_desc['attempts']) - 1 and job_desc['status'] == "SUCCEEDED":
-                    basename = "job.%s.success.log" % (details['name'],)
+                    basename = "%s.success.log" % (details['name'],)
                 else:
-                    basename = "job.%s.attempt-%d.log" % (details['name'], attempti)
-                logdest = os.path.join(dest_url, basename)
+                    basename = "%s.attempt-%d.log" % (details['name'], attempti)
+                logdest = os.path.join(dest_url, JOB_LOGS_PREFIX + basename)
 
                 all_dests.append(logdest)
                 # write log events to binary file
@@ -187,6 +240,149 @@ class AWSBatchSimpleJob(object):
                     s3_streaming_put(log_fp, logdest, content_type="text/plain", content_length=file_len,
                                      logprefix=os.path.basename(logdest))
         return all_dests
+
+    def get_usage(self):
+        """obtain a dictionary of information about this job.
+
+           Call this while the job is running, between attempts, or shortly after the job is complete.
+           This call will access information about the ec2 instance, which is only available for a short
+           amount of time after the instance/ecs agent is terminated.
+        """
+        batch = boto3.client('batch')
+        job_desc = self._get_desc(client=batch)
+        if not job_desc:
+            raise BunniesException("cannot retrieve job information %s" % (self.job_id,))
+
+        def _container_name(logName):
+            return logName.split("/")[1]
+
+        def _attempt_info(attempt, job_desc):
+            resources = [{"vcpus": job_desc['container']['vcpus'], "memory": job_desc['container']['memory']}]
+            return {
+                "containerInstanceArn": [attempt['container']['containerInstanceArn']],
+                "resources": resources,
+                "startedAt": attempt['startedAt'],
+                "stoppedAt": attempt['stoppedAt'],
+                "logs": [attempt['container']['logStreamName']]
+            }
+
+        attempt_info = [_attempt_info(attempt, job_desc) for attempt in job_desc['attempts']]
+
+        job_queue_arn = job_desc['jobQueue']
+
+        job_queue = get_jobqueue(job_queue_arn)
+        compute_env_arns = [item['computeEnvironment'] for item in job_queue['computeEnvironmentOrder']]
+
+        compute_envs = [batch.describe_compute_environments(computeEnvironments=[name])['computeEnvironments'][0]
+                        for name in compute_env_arns]
+        cluster_arns = [compute_env['ecsClusterArn'] for compute_env in compute_envs]
+
+        ecs = boto3.client('ecs')
+        ec2 = boto3.client('ec2')
+
+        def _container_instance_info(ecs_instance_arn, cluster_arns):
+            if ecs_instance_arn not in _container_instance_info.cache:
+                for cluster_arn in cluster_arns:
+                    instances = ecs.describe_container_instances(
+                        containerInstances=[ecs_instance_arn],
+                        cluster=cluster_arn
+                    )['containerInstances']
+                    if not instances:
+                        continue
+                    _container_instance_info.cache[ecs_instance_arn] = instances[0]
+                    return instances[0]
+                _container_instance_info.cache[ecs_instance_arn] = None
+                return None
+            return _container_instance_info.cache[ecs_instance_arn]
+
+        _container_instance_info.cache = {}
+
+        def _ec2_instance_info(ec2_instance_id):
+            if ec2_instance_id not in _ec2_instance_info.cache:
+                instances = ec2.describe_instances(
+                    InstanceIds=[ec2_instance_id])
+                if not instances or not instances['Reservations']:
+                    logger.info("cannot obtain details on instance %s", ec2_instance_id)
+                    _ec2_instance_info.cache[ec2_instance_id] = None
+                    return None
+                res = instances['Reservations'][0]
+                if not res['Instances']:
+                    logger.info("cannot obtain details on instance %s", ec2_instance_id)
+                    _ec2_instance_info.cache[ec2_instance_id] = None
+                    return None
+                _ec2_instance_info.cache[ec2_instance_id] = res['Instances'][0]
+            return _ec2_instance_info.cache[ec2_instance_id]
+
+        _ec2_instance_info.cache = {}
+
+        container_instance_info = {}
+
+        for attempt in attempt_info:
+            attempt['instance'] = []
+            for container_instance_arn in attempt['containerInstanceArn']:
+                container_instance_info = _container_instance_info(container_instance_arn, cluster_arns)
+                if not container_instance_info:
+                    logger.info("could not obtain container instance info for arn %s",
+                                container_instance_arn)
+                    attempt['instance'].append(None)
+                    continue
+
+                instance_id = container_instance_info['ec2InstanceId']
+                instance_info = {'instanceId': instance_id,
+                                 'instanceType': None,
+                                 'coreCount': None,
+                                 'threadsPerCore': None}
+                attempt['instance'].append(instance_info)
+
+                ec2_info = _ec2_instance_info(instance_id)
+                if ec2_info:
+                    instance_info['instanceType'] = ec2_info['InstanceType']
+                    instance_info['startedAt'] = int(ec2_info['LaunchTime'].timestamp() * 1000)
+                    instance_info['coreCount'] = ec2_info['CpuOptions']['CoreCount']
+                    instance_info['threadsPerCore'] = ec2_info['CpuOptions']['ThreadsPerCore']
+
+        def _update_totals(info):
+            vcpu_s = 0
+            memory_s = 0
+            compute_time = 0
+            min_time = job_desc['createdAt']
+            max_time = 0
+
+            for attempt in info['attempts']:
+                if attempt['startedAt'] < min_time:
+                    min_time = attempt['startedAt']
+                if attempt['stoppedAt'] > max_time:
+                    max_time = attempt['stoppedAt']
+                attempt_duration = (attempt['stoppedAt'] - attempt['startedAt'])/1000.0
+                attempt_vcpus = sum([cont['vcpus'] for cont in attempt['resources']])
+                attempt_mem = sum([cont['memory'] for cont in attempt['resources']])
+                compute_time += attempt_duration
+                vcpu_s += attempt_vcpus * attempt_duration
+                memory_s += attempt_mem * attempt_duration
+
+            total = info['total']
+            if min_time == float("+inf"):
+                min_time = 0
+                max_time = 0
+
+            total.update(vcpu_secs=vcpu_s,
+                         memory_secs=memory_s,
+                         compute_time_s=compute_time,
+                         total_time_s=(max_time - min_time)/1000.0)
+
+        usage_obj = {
+            'total': {
+                'vcpu_secs': 0,      # cpu*seconds
+                'memory_secs': 0,    # memory(mb)*seconds
+                'compute_time_s': 0, # time spent computing (not counting scheduling time and time between attempts)
+                'total_time_s': 0,   # overall time spent (between submission and end of last attempt)
+                'network': {},       # data transferred over net
+                'credits': 0         # estimation of $ costs
+            },
+            'attempts': attempt_info
+        }
+        _update_totals(usage_obj)
+        return usage_obj
 
     def log_stream(self, attempt=-1, startTime=None, endTime=None, startFromHead=False):
         """yields each log event of the job,
@@ -620,154 +816,6 @@ def wait_for_jobs(jobs, interval=2*60, condition=None):
     return status_map
 
 
-def extract_job_usage(job_id):
-    """obtain a dictionary of information about the given job id.
-
-       this is meant to be executed very recently after the job given
-       is completed (or after at least one attempt has been completed).
-
-       the reason it is time sensitive is because the instance information
-       is only available for a short amount of time after the instance/ecs agent is
-       terminated.
-    """
-    batch = boto3.client('batch')
-    job_descs = batch.describe_jobs(jobs=[job_id])['jobs']
-    if not job_descs:
-        raise BunniesException("cannot obtain job information for %s" % (job_id,))
-
-    job_desc = job_descs[0]
-
-    def _container_name(logName):
-        return logName.split("/")[1]
-
-    def _attempt_info(attempt, job_desc):
-        resources = [{"vcpus": job_desc['container']['vcpus'], "memory": job_desc['container']['memory']}]
-        return {
-            "containerInstanceArn": [attempt['container']['containerInstanceArn']],
-            "resources": resources,
-            "startedAt": attempt['startedAt'],
-            "stoppedAt": attempt['stoppedAt'],
-            "logs": [attempt['container']['logStreamName']]
-        }
-
-    attempt_info = [_attempt_info(attempt, job_desc) for attempt in job_desc['attempts']]
-
-    job_queue_arn = job_desc['jobQueue']
-
-    job_queue = get_jobqueue(job_queue_arn)
-    compute_env_arns = [item['computeEnvironment'] for item in job_queue['computeEnvironmentOrder']]
-
-    compute_envs = [batch.describe_compute_environments(computeEnvironments=[name])['computeEnvironments'][0]
-                    for name in compute_env_arns]
-    cluster_arns = [compute_env['ecsClusterArn'] for compute_env in compute_envs]
-
-    ecs = boto3.client('ecs')
-    ec2 = boto3.client('ec2')
-
-    def _container_instance_info(ecs_instance_arn, cluster_arns):
-        if ecs_instance_arn not in _container_instance_info.cache:
-            for cluster_arn in cluster_arns:
-                instances = ecs.describe_container_instances(
-                    containerInstances=[ecs_instance_arn],
-                    cluster=cluster_arn
-                )['containerInstances']
-                if not instances:
-                    continue
-                _container_instance_info.cache[ecs_instance_arn] = instances[0]
-                return instances[0]
-            _container_instance_info.cache[ecs_instance_arn] = None
-            return None
-        return _container_instance_info.cache[ecs_instance_arn]
-
-    _container_instance_info.cache = {}
-
-    def _ec2_instance_info(ec2_instance_id):
-        if ec2_instance_id not in _ec2_instance_info.cache:
-            instances = ec2.describe_instances(
-                InstanceIds=[ec2_instance_id])
-            if not instances or not instances['Reservations']:
-                logger.info("cannot obtain details on instance %s", ec2_instance_id)
-                _ec2_instance_info.cache[ec2_instance_id] = None
-                return None
-            res = instances['Reservations'][0]
-            if not res['Instances']:
-                logger.info("cannot obtain details on instance %s", ec2_instance_id)
-                _ec2_instance_info.cache[ec2_instance_id] = None
-                return None
-            _ec2_instance_info.cache[ec2_instance_id] = res['Instances'][0]
-        return _ec2_instance_info.cache[ec2_instance_id]
-
-    _ec2_instance_info.cache = {}
-
-    container_instance_info = {}
-
-    for attempt in attempt_info:
-        attempt['instance'] = []
-        for container_instance_arn in attempt['containerInstanceArn']:
-            container_instance_info = _container_instance_info(container_instance_arn, cluster_arns)
-            if not container_instance_info:
-                logger.info("could not obtain container instance info for arn %s",
-                            container_instance_arn)
-                attempt['instance'].append(None)
-                continue
-
-            instance_id = container_instance_info['ec2InstanceId']
-            instance_info = {'instanceId': instance_id,
-                             'instanceType': None,
-                             'startedAt': None}
-            attempt['instance'].append(instance_info)
-
-            ec2_info = _ec2_instance_info(instance_id)
-            if ec2_info:
-                instance_info['instanceType'] = ec2_info['InstanceType']
-                instance_info['startedAt'] = int(ec2_info['LaunchTime'].timestamp() * 1000)
-
-    def _update_totals(info):
-        vcpu_s = 0
-        memory_s = 0
-        compute_time = 0
-        min_time = job_desc['createdAt']
-        max_time = 0
-
-        for attempt in info['attempts']:
-            if attempt['startedAt'] < min_time:
-                min_time = attempt['startedAt']
-            if attempt['stoppedAt'] > max_time:
-                max_time = attempt['stoppedAt']
-            attempt_duration = (attempt['stoppedAt'] - attempt['startedAt'])/1000.0
-            attempt_vcpus = sum([cont['vcpus'] for cont in attempt['resources']])
-            attempt_mem = sum([cont['memory'] for cont in attempt['resources']])
-            compute_time += attempt_duration
-            vcpu_s += attempt_vcpus * attempt_duration
-            memory_s += attempt_mem * attempt_duration
-
-        total = info['total']
-        if min_time == float("+inf"):
-            min_time = 0
-            max_time = 0
-
-        total.update(vcpu_secs=vcpu_s,
-                     memory_secs=memory_s,
-                     compute_time_s=compute_time,
-                     total_time_s=(max_time - min_time)/1000.0)
-
-    usage_obj = {
-        'total': {
-            'vcpu_secs': 0,         # cpu*seconds
-            'memory_secs': 0,       # memory(mb)*seconds
-            'compute_time_s': 0,   # time spent computing (not counting scheduling time and time between attempts)
-            'total_time_s': 0,     # overall time spent (between submission and end of last attempt)
-            'network': {},       # data transferred over net
-            'credits': 0         # estimation of $ costs
-        },
-        'attempts': attempt_info
-    }
-
-    _update_totals(usage_obj)
-
-    return usage_obj
-
-
 def _cmd_test_jobs(**kwargs):
     role = config['job_role_arn']
     image = "879518704116.dkr.ecr.us-west-2.amazonaws.com/rieseberglab/analytics:5-2.3.2-bunnies"
@@ -786,6 +834,19 @@ def _cmd_test_jobs(**kwargs):
     result = ce.submit_job("simple-sleeper", jobdef['jobDefinitionArn'],
                            ['simple-test-job.sh', '600'], 1, 128)
     print(result)
+
+
+def _cmd_save_job_usage(jobid, **kwargs):
+    import sys
+
+    job = AWSBatchSimpleJob.from_job_id(jobid)
+    if not job:
+        sys.stderr.write("job not found %s\n" % (jobid,))
+        return 1
+
+    dest = job.save_usage()
+    print("usage saved:")
+    print(" ", dest)
 
 
 def _cmd_save_job_logs(jobid, **kwargs):
@@ -831,7 +892,13 @@ def _cmd_show_job_logs(jobid, **kwargs):
 
 
 def _cmd_show_job_usage(jobid, **kwargs):
-    usage = extract_job_usage(jobid)
+    import sys
+
+    job = AWSBatchSimpleJob.from_job_id(jobid)
+    if not job:
+        sys.stderr.write("job not found %s\n" % (jobid,))
+        return 1
+    usage = job.get_usage(jobid)
     if not usage:
         return 1
     print(json.dumps(usage, indent=4))
@@ -852,6 +919,10 @@ def configure_parser(main_subparsers):
 
     subp = subparsers.add_parser("usage", help="show job usage")
     subp.set_defaults(func=_cmd_show_job_usage)
+    subp.add_argument("jobid", metavar="JOBID", type=str, help="the aws batch id of the job")
+
+    subp = subparsers.add_parser("saveusage", help="save job usage")
+    subp.set_defaults(func=_cmd_save_job_usage)
     subp.add_argument("jobid", metavar="JOBID", type=str, help="the aws batch id of the job")
 
     subp = subparsers.add_parser("savelogs", help="save the logs of a job to its output S3 folder")
