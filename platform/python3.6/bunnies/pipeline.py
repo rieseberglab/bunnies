@@ -38,7 +38,7 @@ class PipelineException(Exception):
 
 class BuildNode(object):
     """graph of buildable things with dependencies"""
-    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef", "_sched_node", "_submit_node")
+    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef", "_sched_node", "_job", "_usage")
 
     def __init__(self, data):
         self.data = data  # Cacheable
@@ -47,7 +47,8 @@ class BuildNode(object):
         self._output_ready = None
         self._jobdef = None
         self._sched_node = None
-        self._submit_node = None
+        self._job = None
+        self._usage = []
 
     @property
     def uid(self):
@@ -94,6 +95,16 @@ class BuildNode(object):
             self._output_ready = self.data.exists()
         return self._output_ready
 
+    def job_done(self, success):
+        """
+        must be called when the currently submitted job is completed.
+        we update the total job usage, (and save logs).
+        """
+        logs_dir = self.data.output_prefix()
+        self._job.save_logs(dest_url=logs_dir)
+        run_usage = self._job.get_usage()
+        self._usage.append(run_usage)
+
     def register_job_definition(self, compute_env):
         # FIXME -- the compute environment should register the job definition lazily.
         #          It's a bit odd to do it in two separate steps, especially if most
@@ -119,7 +130,7 @@ class BuildNode(object):
             scheduler_node.cancel()
             return
 
-        assert self._submit_node is None
+        assert self._job is None
 
         # this id is globally unique
         job_id = self.job_id
@@ -164,8 +175,7 @@ class BuildNode(object):
         if settings.get('timeout') <= 0:
             settings['timeout'] = 24*3600*7 # 7 days
 
-        submission = compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
-        self._submit_node = submission
+        self._job = compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
         scheduler_node.submit()
         return
 
@@ -462,11 +472,13 @@ class BuildGraph(object):
                 success_jobs = exec_completion.get('SUCCEEDED', [])
                 for update_job, _ in success_jobs:
                     sched_node = self.scheduler.get_node(update_job.name)
+                    sched_node.data.job_done(True)
                     sched_node.done()
 
                 failed_jobs = exec_completion.get('FAILED', [])
                 for update_job, update_reason in failed_jobs:
                     sched_node = self.scheduler.get_node(update_job.name)
+                    sched_node.data.job_done(False)
                     sched_node.failed(update_reason)
 
         if status['cancelled']:
@@ -476,7 +488,7 @@ class BuildGraph(object):
                 log.info("failed jobs (%3d):", len(failed_build_nodes))
                 for failed_node in failed_build_nodes:
                     log.info("    job_id=%s name=%s reasons=%s",
-                             failed_node._submit_node.job_id, failed_node.job_id,
+                             failed_node._job.job_id, failed_node.job_id,
                              failed_node._sched_node.failures)
 
             raise exc.BuildException("one or more targets failed to build")
