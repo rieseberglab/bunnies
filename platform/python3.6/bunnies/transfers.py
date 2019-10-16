@@ -13,7 +13,7 @@ from botocore.exceptions import ClientError
 from . import utils
 from . import constants
 
-log = logging.getLogger(__package__)
+log = logging.getLogger(__name__)
 
 
 class ProgressPercentage(object):
