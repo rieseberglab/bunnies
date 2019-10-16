@@ -250,7 +250,7 @@ def lambda_handler(event, context):
             while head_attempts < 5:
                 try:
                     head_attempts += 1
-                    head_res2 = client.head_object(Bucket=dst_bucket, Key=dst_key, IfMatch="FOO")
+                    head_res2 = client.head_object(Bucket=dst_bucket, Key=dst_key, IfMatch=copy_result['ETag'])
                     break
                 except ClientError as clierr:
                     if clierr.response['Error']['Code'] == '412':
