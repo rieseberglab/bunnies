@@ -6,7 +6,7 @@
 from . import constants
 from . import utils
 from . import config
-from .exc import NotImpl, NoSuchFile
+from .exc import NotImpl, NoSuchFile, IntegrityException
 from . import unmarshall
 
 
@@ -64,7 +64,7 @@ class ExternalFile(Cacheable, Target):
         self.desc = desc
         self.digests = utils.parse_digests(digests) if digests else {}
         if 'md5' not in self.digests:
-            raise ValueError("md5 needed.")
+            raise ValueError("md5 missing from digests provided: %s" % (repr(digests),))
         self.size = size
         if self.size < 0:
             self.size = -1
@@ -116,13 +116,24 @@ unmarshall.register_kind(ExternalFile)
 
 
 class S3Blob(Cacheable, Target):
+    """a blob on S3
+
+    blobs have a length and known digests.
+    specifying the digests in the contruction is optional: they will be
+    retrieved from the metadata on the remote object.
+
+    """
     kind = "bunnies.S3Blob"
 
-    __slots__ = ("url", "desc", "_manifest")
+    __slots__ = ("url", "desc", "digests", "_manifest")
 
-    def __init__(self, url, desc=None):
+    def __init__(self, url, desc=None, digests=None):
         self.url = url
         self.desc = desc
+
+        # we use those in case they cannot be retrieved from s3 metadata
+        self.digests = utils.parse_digests(digests) if digests else {}
+
         self._manifest = None
 
     def __str__(self):
@@ -137,8 +148,17 @@ class S3Blob(Cacheable, Target):
             pfx = constants.DIGEST_HEADER_PREFIX
             head_digests = {key[len(pfx):]: val for key, val in meta['Metadata'].items()
                             if key.startswith(pfx)}
+            try:
+                md5_digest = head_digests['md5']
+                if "md5" in self.digests and md5_digest != self.digests['md5']:
+                    raise IntegrityException("provided digest %s doesn't match digest in %s (%s)" % (
+                        self.digests['md5'], self.url, md5_digest))
+            except KeyError:
+                if 'md5' not in self.digests:
+                    raise IntegrityException("no md5 digest in %s on blob: %s" % (repr(head_digests), self.url))
+                else:
+                    head_digests['md5'] = self.digests['md5']
 
-            _ = head_digests['md5']
             self._manifest = {constants.MANIFEST_KIND_ATTR: self.kind,  # FIXME meta class
                               "desc": self.desc,
                               "url": self.url,
@@ -304,9 +324,10 @@ class Transform(Target, Cacheable):
 
     def output_prefix(self, bucket=None):
         bucket = bucket or config['storage']['build_bucket']
-        return "s3://%(bucket)s/%(name)s-%(cid)s/" % {
+        return "s3://%(bucket)s/%(name)s-%(version)s-%(cid)s/" % {
             'name': self.name,
             'bucket': bucket,
+            'version': self.version,
             'cid': self.canonical_id
         }
 

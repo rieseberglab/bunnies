@@ -11,6 +11,9 @@ class NoSuchFile(BunniesException):
         super(NoSuchFile, self).__init__("no such file: " + url)
         self.url = url
 
+class IntegrityException(BunniesException):
+    pass
+
 class LambdaException(BunniesException):
     pass
 
