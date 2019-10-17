@@ -285,6 +285,9 @@ class BuildGraph(object):
         if path is None:
             path = set()
 
+        def _path_string(p):
+            return ", ".join([str(entry) for entry in p])
+
         # recurse in basic structures
         if isinstance(obj, list):
             return [self._dealias(o, path=path) for o in obj]
@@ -294,13 +297,13 @@ class BuildGraph(object):
             return tuple([self._dealias(o, path=path) for o in obj])
 
         if not isinstance(obj, Cacheable):
-            raise PipelineException("pipeline targets and their dependencies should be cacheable: %s" % (repr(obj)))
+            raise PipelineException("pipeline targets and their dependencies should be cacheable: %s (path=%s)" % (repr(obj), _path_string(path)))
 
         # dealias object based on its uid
 
         if obj in path:
             # produce ordered proof of cycle
-            raise PipelineException("Cycle in dependency graph detected: %s", path)
+            raise PipelineException("Cycle in dependency graph detected: %s", _path_string(path))
 
         path.add(obj)
 
