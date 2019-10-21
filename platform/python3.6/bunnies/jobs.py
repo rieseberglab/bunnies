@@ -107,6 +107,8 @@ class AWSBatchSimpleJob(object):
 
     def get_status(self, attempt=-1):
         """
+        returns the job status for the matching attempt.
+
         {
                     "startedAt": 1566241967286,
                     "stoppedAt": 1566241967507,
@@ -122,15 +124,14 @@ class AWSBatchSimpleJob(object):
         """
         job_desc = self._get_desc()
         if not job_desc:
-            return None
+            return None, None
 
         if not job_desc['attempts']:
             # logger.debug("no attempts: %s", job_desc)
-            return None
+            return None, job_desc
 
         attempt = job_desc['attempts'][attempt]
-        attempt['createdAt'] = job_desc['createdAt']
-        return attempt
+        return attempt, job_desc
 
     def save_usage(self, dest_url=None):
         """extracts usage information and saves it in the folder designateg by dest_url (s3 folder)
@@ -893,18 +894,43 @@ def _cmd_show_job_logs(jobid, **kwargs):
         lines_printed += 1
         print(_get_time(event['timestamp']), event['message'])
 
-    status = job.get_status()
+    status, job_desc = job.get_status()
+
     if not status:
         sys.stderr.write("status information not yet available\n")
-        return 1
+        if not job_desc.get('startedAt', 0):
+            return 1
+        started_at = job_desc.get('startedAt', 0)
+        stopped_at = job_desc.get('stoppedAt', 0)
+    else:
+        started_at = status.get('startedAt', 0)
+        stopped_at = status.get('stoppedAt', 0)
 
-    secs = (status.get('stoppedAt', 0) - status.get('startedAt', 0)) / 1000.0
-    from_submit = (status.get('stoppedAt', 0) - status.get('createdAt', 0)) / 1000.0
+    if stopped_at == 0:
+        endtime = time.time() * 1000
+    else:
+        endtime = stopped_at
+
+    if 'timeout' in job_desc:
+        timeout_ms = job_desc.get('timeout').get("attemptDurationSeconds") * 1000
+    else:
+        timeout_ms = -1
+
+    secs = (endtime - started_at) / 1000.0
+    from_submit = (endtime - job_desc.get('createdAt', 0)) / 1000.0
     run_t = timedelta(seconds=secs)
     submit_t = timedelta(seconds=from_submit)
-    print("exited code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
+
+    if status:
+        print("exited code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
+
+
     print("run time: %6.3fs (%s)" % (secs, str(run_t)))
     print("from submission: %6.3fs (%s)" % (from_submit, str(submit_t)))
+    if timeout_ms > 0 and endtime < (started_at + timeout_ms):
+        timeout_secs = (started_at + timeout_ms - endtime) / 1000.0
+        timeout_t = timedelta(seconds=timeout_secs)
+        print("time left: %6.3fs (%s)" % (timeout_secs, str(timeout_t)))
 
 
 def _cmd_show_job_usage(jobid, **kwargs):
