@@ -80,13 +80,19 @@ cleanup () {
 }
 trap 'cleanup' EXIT
 
-# mktemp arguments are not very portable.  We make a temporary directory with
-# portable arguments, then use a consistent filename within.
 TMPTEMPLATE="${BUNNIES_JOBID}-XXXXXXX"
-TMPDIR="$(mktemp -d -t "$TMPTEMPLATE")" || error_exit "Failed to create temp directory."
+
+# Some jobs spill temp files into /tmp -- the behavior we see in the container
+# is that tmp gets full and then the filesystem becomes readonly.
+if [[ -d /scratch/ ]] && [[ -w /scratch/ ]]; then
+    mkdir -p /scratch/tmp
+    export TMPDIR=$(mktemp -d -t "$TMPTEMPLATE" -p /scratch/tmp) || error_exit "Failed to create temp directory."
+else
+    export TMPDIR="$(mktemp -d -t "$TMPTEMPLATE")" || error_exit "Failed to create temp directory."
+fi
+
 TMPFILE="${TMPDIR}/jobscript"
 install -m 0600 /dev/null "${TMPFILE}" || error_exit "Failed to create temp file."
-
 
 # Fetch and run a script
 fetch_and_run_script () {
