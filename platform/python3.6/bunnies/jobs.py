@@ -888,12 +888,14 @@ def _cmd_show_job_logs(jobid, **kwargs):
     def _get_time(ms):
         return datetime.fromtimestamp(ms/1000.0).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
+    lines_printed = 0
     for event in job.log_stream(startFromHead=True):
+        lines_printed += 1
         print(_get_time(event['timestamp']), event['message'])
 
     status = job.get_status()
     if not status:
-        sys.stderr.write("job exists, but has no logs to show\n")
+        sys.stderr.write("status information not yet available\n")
         return 1
 
     secs = (status.get('stoppedAt', 0) - status.get('startedAt', 0)) / 1000.0
