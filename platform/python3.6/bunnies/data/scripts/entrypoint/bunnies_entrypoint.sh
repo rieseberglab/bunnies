@@ -108,7 +108,10 @@ fetch_and_run_script () {
   export BUNNIES_WORKDIR
 
   : space available
-  df -h
+  df -h || :
+
+  : limits
+  ulimit -a || :
 
   : environment
   env
