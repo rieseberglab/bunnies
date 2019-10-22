@@ -529,16 +529,17 @@ runcmd:
 
                 check_top_level = {k: cenv[k] for k in top_level_match}
                 if top_level_match != check_top_level:
-                    logger.debug("cannot use compute env %s because of mismatch: got %s, expected %s",
-                                 check_top_level, top_level_match)
+                    mismatch_keys = [k for k in check_top_level if check_top_level[k] != top_level_match[k]]
+                    logger.debug("cannot use compute env %s because of mismatch on keys %s: has %s, but needs %s",
+                                 cenv['computeEnvironmentName'], mismatch_keys, check_top_level, top_level_match)
                     continue
 
                 cr_mismatches = [key for key in comp_res_match
                                  if key not in cenv['computeResources'] or
                                  cenv['computeResources'][key] != comp_res_match[key]]
                 if len(cr_mismatches) > 0:
-                    logger.debug("cannot use compute env %s because of mismatch in compute resources: has %s but needs %s",
-                                 cenv['computeResources'], comp_res_match)
+                    logger.debug("cannot use compute env %s because of mismatch in compute resources on keys %s: has %s but needs %s",
+                                 cenv['computeEnvironmentName'], cr_mismatches, cenv['computeResources'], comp_res_match)
                     continue
 
                 found = cenv
@@ -563,31 +564,32 @@ runcmd:
         lt_id, lt_version = self._create_launch_template()
 
         comp_resources = {
-                "type": ce_type,
-                "minvCpus": 0,
-                "maxvCpus": 256,
-                "desiredvCpus": 0,
-                "instanceTypes": [
-                    "optimal"
-                ],
-                "subnets": [
-                    get_subnet_id()
-                ],
-                "securityGroupIds": [
-                    get_security_group_id()
-                ],
-                "ec2KeyPair": get_key_name(),
-                "instanceRole": instance_profile_arn,
-                "tags": {
-                    "platform": constants.PLATFORM,
-                    "ce_name": self.name
-                },
-                "bidPercentage": 100,
-                "spotIamFleetRole": spot_role_arn,
-                "launchTemplate": {
-                    "launchTemplateId": lt_id,
-                    "version": str(lt_version)
-                }
+            "type": ce_type,
+            "minvCpus": 0,
+            "maxvCpus": 256,
+            # desiredvCpus changes dynamically -- we don't match on it.
+            #"desiredvCpus": 0,
+            "instanceTypes": [
+                "optimal"
+            ],
+            "subnets": [
+                get_subnet_id()
+            ],
+            "securityGroupIds": [
+                get_security_group_id()
+            ],
+            "ec2KeyPair": get_key_name(),
+            "instanceRole": instance_profile_arn,
+            "tags": {
+                "platform": constants.PLATFORM,
+                "ce_name": self.name
+            },
+            "bidPercentage": 100,
+            "spotIamFleetRole": spot_role_arn,
+            "launchTemplate": {
+                "launchTemplateId": lt_id,
+                "version": str(lt_version)
+            }
         }
 
         existing = self._find_matching_ce(self.name, {"serviceRole": service_role_arn, "type": "MANAGED"}, comp_resources)
@@ -596,6 +598,7 @@ runcmd:
 
         logger.info("creating new batch compute environment associated to name %s", self.name)
         random_name = self.name + "-" + str(uuid4())[0:8]
+        comp_resources["desiredvCpus"] = 0 # we set it to 0 so it goes back cold when there are no jobs
         client.create_compute_environment(**{
             "computeEnvironmentName": random_name,
             "type": "MANAGED",
