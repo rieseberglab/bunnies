@@ -404,6 +404,9 @@ runcmd:
         logger.debug("using the following instance launch script: %s", script)
         return script
 
+    def _launch_template_name(self):
+        return "%s-ce-launch-template-%s" % (constants.PLATFORM, self.name)
+
     def _create_launch_template(self):
         """returns launch template id and version to use"""
 
@@ -437,10 +440,10 @@ runcmd:
                                      check_dict, tag_dict)
                 return found
 
-        lt_name = "%s-ce-launch-template-%s" % (constants.PLATFORM, self.name)
+        lt_name = self._launch_template_name()
 
         instance_tags = [("platform", constants.PLATFORM),
-                         ("compute_environment", lt_name)]
+                         ("compute_environment", self.name)]
 
         for diskname, disk in self.disks.items():
             dnstag = ("disk-dns-%s" % (diskname,), disk['obj'].dns_name)
@@ -503,49 +506,53 @@ runcmd:
                     lt_name, info['LaunchTemplateId'], version_number)
         return info['LaunchTemplateId'], version_number
 
+    @staticmethod
+    def _find_matching_ce(name, top_level_match, comp_res_match, client=None):
+        if not client:
+            client = boto3.client("batch")
+        # find a compute environment which matches the given settings
+        paginator = client.get_paginator("describe_compute_environments")
+        iterator = paginator.paginate()
+        logger.debug("listing compute environments matching %s settings", name)
+        found = None
+
+        top_level_match = top_level_match if top_level_match else {}
+        comp_res_match = comp_res_match if comp_res_match else {}
+
+        for page in iterator:
+            cenvs = page['computeEnvironments']
+            if len(cenvs) == 0:
+                break
+            for cenv in cenvs:
+                if not cenv['computeEnvironmentName'].startswith(name + "-"):
+                    continue
+
+                check_top_level = {k: cenv[k] for k in top_level_match}
+                if top_level_match != check_top_level:
+                    logger.debug("cannot use compute env %s because of mismatch: got %s, expected %s",
+                                 check_top_level, top_level_match)
+                    continue
+
+                cr_mismatches = [key for key in comp_res_match
+                                 if key not in cenv['computeResources'] or
+                                 cenv['computeResources'][key] != comp_res_match[key]]
+                if len(cr_mismatches) > 0:
+                    logger.debug("cannot use compute env %s because of mismatch in compute resources: has %s but needs %s",
+                                 cenv['computeResources'], comp_res_match)
+                    continue
+
+                found = cenv
+                break
+
+        if found:
+            logger.info("batch compute environment %s (arn=%s) matches requirements for %s",
+                        found['computeEnvironmentName'], found['computeEnvironmentArn'],
+                        name)
+        return found
+
+
     def _create_batch_ce(self):
         client = boto3.client("batch")
-
-        def _find_matching(name, top_level_match, comp_res_match):
-            # find a compute environment which matches the given settings
-            paginator = client.get_paginator("describe_compute_environments")
-            iterator = paginator.paginate()
-            logger.debug("listing compute environments matching %s settings", name)
-            found = None
-
-            top_level_match = top_level_match if top_level_match else {}
-            comp_res_match = comp_res_match if comp_res_match else {}
-
-            for page in iterator:
-                cenvs = page['computeEnvironments']
-                if len(cenvs) == 0:
-                    break
-                for cenv in cenvs:
-                    if not cenv['computeEnvironmentName'].startswith(name + "-"):
-                        continue
-
-                    check_top_level = {k: cenv[k] for k in top_level_match}
-                    if top_level_match != check_top_level:
-                        logger.debug("cannot use compute env %s because of mismatch: got %s, expected %s",
-                                     check_top_level, top_level_match)
-                        continue
-
-                    cr_mismatches = [key for key in comp_res_match
-                                     if key not in cenv['computeResources'] or
-                                     cenv['computeResources'][key] != comp_res_match[key]]
-                    if len(cr_mismatches) > 0:
-                        logger.debug("cannot use compute env %s because of mismatch in compute resources: has %s but needs %s",
-                                     cenv['computeResources'], comp_res_match)
-                        continue
-
-                    found = cenv
-                    break
-
-            if found:
-                logger.info("batch compute environment %s (arn=%s) matches requirements for %s",
-                            found['computeEnvironmentName'], found['computeEnvironmentArn'],
-                            name)
-            return found
 
         ce_type = "SPOT" # "EC2"
 
@@ -583,7 +590,7 @@ runcmd:
                 }
         }
 
-        existing = _find_matching(self.name, {"serviceRole": service_role_arn, "type": "MANAGED"}, comp_resources)
+        existing = self._find_matching_ce(self.name, {"serviceRole": service_role_arn, "type": "MANAGED"}, comp_resources)
         if existing:
             return existing
 
@@ -634,17 +641,109 @@ runcmd:
         """ delete all entities associated with this compute environment
             this includes filesystems created for this compute environment.
         """
+
+        # find all compute-environments defined with that name
+        def _find_matching_envs(name):
+            client = boto3.client('batch')
+            paginator = client.get_paginator("describe_compute_environments")
+            iterator = paginator.paginate()
+            found = []
+            for page in iterator:
+                cenvs = page['computeEnvironments']
+                if len(cenvs) == 0:
+                    break
+                for cenv in cenvs:
+                    if not cenv['computeEnvironmentName'].startswith(name + "-"):
+                        continue
+                    found.append(cenv)
+            return found
+
+        def _find_matching_launch_templates(name, tags):
+            """find templates by name and given tags"""
+            client = boto3.client("ec2")
+            paginator = client.get_paginator("describe_launch_template_versions")
+            template_iterator = paginator.paginate(LaunchTemplateName=name)
+            found = []
+
+            tag_dict = {x[0]: x[1] for x in tags}
+            for page in template_iterator:
+                versions = page['LaunchTemplateVersions']
+                if len(versions) == 0:
+                    break
+                for version in versions:
+                    print(version)
+                    instance_tags = [specs['Tags'] for specs in version['LaunchTemplateData']['TagSpecifications']
+                                     if specs['ResourceType'] == "instance"][0]
+
+                    check_dict = {x['Key']: x['Value'] for x in instance_tags}
+                    if any([True for xk in tag_dict if
+                            xk not in check_dict or check_dict[xk] != tag_dict[xk]]):
+                        continue
+                    found.append(version)
+                return found
+
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
             dobj.delete()
 
-        # fixme
+        matching_ces = []
+
+        if self.batch_ce:
+            matching_ces = [self.batch_ce]
+        else:
+            matching_ces = _find_matching_envs(self.name)
+        if not matching_ces:
+            logger.error("could not find compute environment matching name: %s", self.name)
+            return None
+
+        ce_names = [ce['computeEnvironmentName'] for ce in matching_ces]
+        job_queue_names = [ce_name + "-jq" for ce_name in ce_names]
+
+        batch = boto3.client('batch')
+
         # - set job queue to disabled
+        for jq_name in job_queue_names:
+            logger.info("disabling job queue %s", jq_name)
+            batch.update_job_queue(jobQueue=jq_name, state='DISABLED')
+
         # - set compute environment to disabled
+        for ce_name in ce_names:
+            logger.info("disabling compute environment %s", ce_name)
+            batch.update_compute_environment(computeEnvironment=ce_name, state='DISABLED')
+
         # - wait for job queue to settle.
+        if job_queue_names:
+            jobs.wait_queue_disabled(job_queue_names)
+
         # - delete job queue
-        # - delete compute env
+        for jq_name in job_queue_names:
+            logger.info("deleting job queue %s", jq_name)
+            #batch.delete_job_queue(jobQueue=jq_name)
+        self.job_queue = None
+
         # - delete launch template(s)
+        instance_tags = [("platform", constants.PLATFORM),
+                         ("compute_environment", self.name)]
+        lt_name = self._launch_template_name()
+        job_template_versions = _find_matching_launch_templates(lt_name, instance_tags)
+        ec2 = boto3.client('ec2')
+        # ec2.delete_launch_template_versions(
+        #     DryRun=True|False,
+        #     LaunchTemplateId='string',
+        #     LaunchTemplateName='string',
+        #     Versions=[
+        #         'string',
+        #     ]
+        # )
+        # response = client.delete_launch_template(
+        #     DryRun=True|False,
+        #     LaunchTemplateId='string',
+        #     LaunchTemplateName='string'
+        # )
+        for version in job_template_versions:
+            logger.info("job template: %s", version)
+
+        # delete compute env
 
     def wait_ready(self):
         """ensure all the entities are VALID and ready to execute things"""
@@ -854,6 +953,35 @@ def _setup_roles(**kwargs):
     logger.info("environment settings written to %s: %s", outfile,
                 role_settings)
 
+def _list_env(**kwargs):
+    client = boto3.client('batch')
+
+    def _find_matching_envs():
+        paginator = client.get_paginator("describe_compute_environments")
+        iterator = paginator.paginate()
+        found = []
+        for page in iterator:
+            cenvs = page['computeEnvironments']
+            if len(cenvs) == 0:
+                break
+            for cenv in cenvs:
+                cenv_tags = cenv['computeResources']['tags']
+                if not cenv_tags.get("platform", None) == constants.PLATFORM:
+                    continue
+                found.append(cenv)
+        return found
+
+    found = _find_matching_envs()
+
+    summary = []
+    for cenv in found:
+        tags = cenv['computeResources']['tags']
+        if 'ce_name' in tags:
+            summary.append((tags['ce_name'], cenv['computeEnvironmentName']))
+    if summary:
+        print("#ENV\tCENAME")
+    for item in sorted(summary):
+        print("%s\t%s" % item)
 
 def _create_env(envname='', **kwargs):
     """create an environment and wait for it to be ready"""
@@ -884,6 +1012,9 @@ def configure_parser(main_subparsers):
     subp = subparsers.add_parser("delete", help="delete/teardown a compute environment")
     subp.set_defaults(func=_delete_env)
     subp.add_argument("envname", metavar="ENVNAME", type=str, help="the name of the environment")
+
+    subp = subparsers.add_parser("list", help="list existing compute environments")
+    subp.set_defaults(func=_list_env)
 
     subp = subparsers.add_parser("setup", help="setup roles and permissions to support compute environments",
                                  description="This creates the roles and permissions to create compute environments. "

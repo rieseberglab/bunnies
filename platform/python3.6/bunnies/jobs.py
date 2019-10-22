@@ -430,6 +430,61 @@ class AWSBatchSimpleJob(object):
 def _custom_waiters():
     if not _custom_waiters.model:
         waiters = {
+            "JobQueueDisabled": {
+                "delay": 15,
+                "operation": "DescribeJobQueues",
+                "maxAttempts": 40,
+                "acceptors": [
+                    {
+                        "expected": "ENABLED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].state"
+                    },
+                    {
+                        "expected": "CREATING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "UPDATING",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "DELETING",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "DELETED",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "INVALID",
+                        "matcher": "pathAny",
+                        "state": "failure",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "expected": "VALID",
+                        "matcher": "pathAll",
+                        "state": "success",
+                        "argument": "jobQueues[].status"
+                    },
+                    {
+                        "matcher": "path",
+                        "expected": True,
+                        "argument": "length(jobQueues[]) > `0`",
+                        "state": "failure"
+                    }
+                ]
+            },
             "JobQueueReady": {
                 "delay": 15,
                 "operation": "DescribeJobQueues",
@@ -559,8 +614,22 @@ def get_jobqueue(name):
     return jq['jobQueues'][0]
 
 
+def wait_queue_disabled(queueNames):
+    """wait for all job queues to be in the DISABLED+VALID state"""
+    if not queueNames:
+        return
+
+    logger.info("waiting for queue(s) %s to be disabled...", queueNames)
+    client = boto3.client('batch')
+    waiter = botocore.waiter.create_waiter_with_client("JobQueueDisabled", _custom_waiters(), client)
+    waiter.wait(jobQueues=queueNames)
+    logger.info("queue(s) %s disabled", queueNames)
+
 def wait_queue_ready(queueNames):
-    """wait for a job queue to be in the READY+VALID state"""
+    """wait for a job queue to be in the ENABLED+VALID state"""
+    if not queueNames:
+        return
+
     logger.info("waiting for queue(s) %s to be ready...", queueNames)
     client = boto3.client('batch')
     waiter = botocore.waiter.create_waiter_with_client("JobQueueReady", _custom_waiters(), client)
