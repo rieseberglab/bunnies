@@ -11,6 +11,7 @@ import base64
 import boto3
 import botocore
 import botocore.waiter
+import time
 
 from botocore.exceptions import ClientError
 
@@ -197,7 +198,7 @@ class FSxDisk(object):
     def retrieve_existing(self):
         # FIXME -- the caller should inspect the state of the returned filesystem
         client = boto3.client('fsx')
-        resp = {'NextToken': None}
+        page = {'NextToken': None}
 
         def _tags_match(name, tags):
             name_tags = [tag for tag in tags if
@@ -210,20 +211,23 @@ class FSxDisk(object):
                              tag['Value'] == constants.PLATFORM]
             return (len(platform_tags) > 0)
 
-        while "NextToken" in resp:
+        while "NextToken" in page:
             kwargs = {'MaxResults': 10}
-            if resp['NextToken']:
-                kwargs['NextToken'] = resp['NextToken']
+            if page['NextToken']:
+                kwargs['NextToken'] = page['NextToken']
 
             logger.debug("listing file systems...")
             page = client.describe_file_systems(**kwargs)
             logger.debug("retrieved page with %d fs(es) %s", len(page['FileSystems']), page)
+            if len(page['FileSystems']) == 0:
+                return None
             matches = [candidate for candidate in page['FileSystems']
                        if _tags_match(self.name, candidate['Tags'])]
             if matches:
                 return matches[0]
-            if len(page['FileSystems']) == 0:
-                return None
+
+            if 'NextToken' in page:
+                time.sleep(0.1)
         return None
 
     @property
