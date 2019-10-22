@@ -379,6 +379,10 @@ class ComputeEnv(object):
         # program and written to the runcmd script, which is then run by /bin/sh as root.
         #
         # FIXME: disallow whitespace and escapes from names provided by the user.
+        #
+        # cloud-boothook is used to make changes earlier than cloud-config runcmd, so that the changes
+        # are visible before dockerd starts. In particular cloud-init-per is used to set things up so that
+        # they only run once when the VM is initialized, not every time it boots.
         script = """MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
 
@@ -395,6 +399,12 @@ runcmd:
 %(mount)s
 
 --==MYBOUNDARY==
+Content-Type: text/cloud-boothook; charset="us-ascii"
+
+# Set Docker daemon options
+cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit nofile=8192:65536"' >> /etc/sysconfig/docker
+
+--==MYBOUNDARY==--
 """ % {
         "mkdirs": _cmdsplit(["[mkdir, -p, %s]" % (mtpoint,) for mtpoint in mount_targets]),
         "fstabs": _cmdsplit(["""[sh, -c, "echo %s >> /etc/fstab"]""" % (fstab,) for fstab in fstab_lines]),
