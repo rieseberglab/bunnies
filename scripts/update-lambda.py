@@ -230,10 +230,17 @@ def main():
             log.info("updating event bridge rule: %s to target %s",
                      event_rule['Name'], lambda_arn)
 
-            # create/update
-            events.put_rule(Tags=[
+            updated_rule = events.put_rule(Tags=[
                 {'Key': 'platform', 'Value': bunnies.constants.PLATFORM}
             ], **event_rule)
+
+            # update lambda to allow the rule to invoke it
+            lambda_cli.add_permission(
+                FunctionName=lambda_arn,
+                StatementId="allow-rule-" + event_rule['Name'],
+                Action="lambda:InvokeFunction",
+                Principal="events.amazonaws.com",
+                SourceArn=updated_rule['RuleArn'])
 
             # fixme paging iterator
             response = events.list_targets_by_rule(
