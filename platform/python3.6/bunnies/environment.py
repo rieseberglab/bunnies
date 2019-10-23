@@ -335,6 +335,7 @@ class FSxDisk(object):
         """wait for the filesystem to be deleted completely"""
         client = boto3.client('fsx')
         if self.fsid:
+            logger.info("waiting for filesystem %s (id=%s) to be deleted...", self.name, self.fsid)
             waiter = botocore.waiter.create_waiter_with_client("FileSystemDeleted", _custom_waiters(), client)
             waiter.wait(FileSystemIds=[self.fsid])
         else:
