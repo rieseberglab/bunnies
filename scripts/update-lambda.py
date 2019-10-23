@@ -215,7 +215,7 @@ def main():
                 log.info("Lambda %s already exists. updating config...", lambda_name)
                 config_update = lambda_cli.update_function_configuration(**updated)
                 lambdas.append(config_update)
-                log.info("update: %s", config_update)
+                #log.info("update: %s", config_update)
             else:
                 raise
 
