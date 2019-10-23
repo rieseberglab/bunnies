@@ -805,19 +805,16 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         job_template_versions = _find_matching_launch_templates(lt_name, instance_tags)
 
         ec2 = boto3.client('ec2')
-        for version in job_template_versions:
-            logger.info("deleting launch template name=%s version=%s",
-                        version['LaunchTemplateName'],
-                        version['VersionNumber'])
-            ec2.delete_launch_template_versions(
-                LaunchTemplateName=version['LaunchTemplateName'],
-                Versions=[str(version['VersionNumber'])]
-            )
-            # response = client.delete_launch_template(
-            #     DryRun=True|False,
-            #     LaunchTemplateId='string',
-            #     LaunchTemplateName='string'
+        lt_names = {version['LaunchTemplateName']: True for version in job_template_versions}
+        for lt_name in lt_names:
+            logger.info("deleting launch template name=%s", lt_name)
+            # ec2.delete_launch_template_versions(
+            #     LaunchTemplateName=version['LaunchTemplateName'],
+            #     Versions=[str(version['VersionNumber'])]
             # )
+            ec2.delete_launch_template(
+                LaunchTemplateName=lt_name
+            )
         # delete compute env
         ecs = boto3.client('ecs')
 
@@ -827,7 +824,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
             try:
                 logger.info("deleting ECS cluster: %s", ecs_cluster)
                 delete_resp = ecs.delete_cluster(cluster=ecs_cluster)
-                logger.info("delete response: %s", delete_resp)
+                # logger.info("delete response: %s", delete_resp)
                 deleted_clusters.append(ecs_cluster)
             except ClientError as clierr:
                 print("error deleting cluster " + clierr.response['Error'])
