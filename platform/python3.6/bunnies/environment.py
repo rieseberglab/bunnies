@@ -106,6 +106,33 @@ def _custom_waiters():
                 ]
             },
 
+            # ECS cluster state is inactive
+            "ClusterInactive": {
+                "delay": 15,
+                "operation": "DescribeClusters",
+                "maxAttempts": 40,
+                "acceptors": [
+                    {
+                        "expected": "INACTIVE",
+                        "matcher": "pathAll",
+                        "state": "success",
+                        "argument": "clusters[].status"
+                    },
+                    {
+                        "expected": "ACTIVE",
+                        "matcher": "pathAny",
+                        "state": "retry",
+                        "argument": "clusters[].status"
+                    },
+                    {
+                        "matcher": "path",
+                        "expected": True,
+                        "argument": "length(clusters[]) == `0`",
+                        "state": "failure"
+                    }
+                ]
+            },
+
             "ComputeEnvironmentReady": {
                 "delay": 15,
                 "operation": "DescribeComputeEnvironments",
@@ -673,28 +700,38 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
 
         def _find_matching_launch_templates(name, tags):
             """find templates by name and given tags"""
+
+            logger.debug("searching for launch templates with LaunchTemplateName=%s and instance_tags=%s", name, tags)
+
             client = boto3.client("ec2")
             paginator = client.get_paginator("describe_launch_template_versions")
             template_iterator = paginator.paginate(LaunchTemplateName=name)
             found = []
 
             tag_dict = {x[0]: x[1] for x in tags}
-            for page in template_iterator:
-                versions = page['LaunchTemplateVersions']
-                if len(versions) == 0:
-                    break
-                for version in versions:
-                    print(version)
-                    instance_tags = [specs['Tags'] for specs in version['LaunchTemplateData']['TagSpecifications']
-                                     if specs['ResourceType'] == "instance"][0]
+            try:
+                for page in template_iterator:
+                    versions = page['LaunchTemplateVersions']
+                    if len(versions) == 0:
+                        break
+                    for version in versions:
+                        print(version)
+                        instance_tags = [specs['Tags'] for specs in version['LaunchTemplateData']['TagSpecifications']
+                                         if specs['ResourceType'] == "instance"][0]
 
-                    check_dict = {x['Key']: x['Value'] for x in instance_tags}
-                    if any([True for xk in tag_dict if
-                            xk not in check_dict or check_dict[xk] != tag_dict[xk]]):
-                        continue
-                    found.append(version)
-                return found
+                        check_dict = {x['Key']: x['Value'] for x in instance_tags}
+                        if any([True for xk in tag_dict if
+                                xk not in check_dict or check_dict[xk] != tag_dict[xk]]):
+                            continue
+                        found.append(version)
+            except ClientError as clierr:
+                if clierr.response['Error']['Code'] == 'InvalidLaunchTemplateName.NotFoundException':
+                    pass
+                else:
+                    raise
+            return found
 
+        # delete disks
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
             dobj.delete()
@@ -705,19 +742,45 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
             matching_ces = [self.batch_ce]
         else:
             matching_ces = _find_matching_envs(self.name)
+
         if not matching_ces:
             logger.error("could not find compute environment matching name: %s", self.name)
             return None
 
         ce_names = [ce['computeEnvironmentName'] for ce in matching_ces]
+        ce_arns = {ce['computeEnvironmentArn']: ce for ce in matching_ces}
         job_queue_names = [ce_name + "-jq" for ce_name in ce_names]
 
         batch = boto3.client('batch')
 
+        # - update job queues linked to one of the compute environments
+        jobqueue_updates = {}
+        if matching_ces:
+            for jq in jobs.get_jobqueues():
+                comp_env = jq['computeEnvironmentOrder']
+                new_order = []
+                for entry in comp_env:
+                    if entry['computeEnvironment'] not in ce_arns:
+                        new_order.append(entry)
+                if new_order != comp_env:
+                    jobqueue_updates[jq['jobQueueName']] = {
+                        'computeEnvironmentOrder': new_order
+                    }
+
         # - set job queue to disabled
         for jq_name in job_queue_names:
-            logger.info("disabling job queue %s", jq_name)
-            batch.update_job_queue(jobQueue=jq_name, state='DISABLED')
+                jobqueue_updates.setdefault(jq_name, {})['state'] = "DISABLED"
+
+        # process job queue updates
+        for jq_name, jq_update in jobqueue_updates.items():
+            try:
+                logger.info("updating job queue %s data: %s", jq_name, jq_update)
+                batch.update_job_queue(jobQueue=jq_name,  **jq_update)
+            except ClientError as clierr:
+                if clierr.response['Error']['Message'].endswith("does not exist"):
+                    pass
+                else:
+                    raise
 
         # - set compute environment to disabled
         for ce_name in ce_names:
@@ -731,32 +794,63 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         # - delete job queue
         for jq_name in job_queue_names:
             logger.info("deleting job queue %s", jq_name)
-            #batch.delete_job_queue(jobQueue=jq_name)
+            batch.delete_job_queue(jobQueue=jq_name)
         self.job_queue = None
 
         # - delete launch template(s)
+        lt_name = self._launch_template_name()
         instance_tags = [("platform", constants.PLATFORM),
                          ("compute_environment", self.name)]
-        lt_name = self._launch_template_name()
         job_template_versions = _find_matching_launch_templates(lt_name, instance_tags)
+
         ec2 = boto3.client('ec2')
-        # ec2.delete_launch_template_versions(
-        #     DryRun=True|False,
-        #     LaunchTemplateId='string',
-        #     LaunchTemplateName='string',
-        #     Versions=[
-        #         'string',
-        #     ]
-        # )
-        # response = client.delete_launch_template(
-        #     DryRun=True|False,
-        #     LaunchTemplateId='string',
-        #     LaunchTemplateName='string'
-        # )
         for version in job_template_versions:
             logger.info("job template: %s", version)
-
+            ec2.delete_launch_template_versions(
+                 LaunchTemplateName=version['LaunchTemplateName'],
+                  Versions=[version['LaunchTemplateVersion']]
+            )
+            # response = client.delete_launch_template(
+            #     DryRun=True|False,
+            #     LaunchTemplateId='string',
+            #     LaunchTemplateName='string'
+            # )
         # delete compute env
+        ecs = boto3.client('ecs')
+
+        deleted_clusters = []
+        for ce in matching_ces:
+            ecs_cluster = ce['ecsClusterArn']
+            try:
+                logger.info("deleting ECS cluster: %s", ecs_cluster)
+                delete_resp = ecs.delete_cluster(cluster=ecs_cluster)
+                logger.info("delete response: %s", delete_resp)
+                deleted_clusters.append(ecs_cluster)
+            except ClientError as clierr:
+                print("error deleting cluster " + clierr.response['Error'])
+                # if clierr.response['Error']['Message'].endswith("does not exist"):
+                #     pass
+                # else:
+                raise
+
+        if deleted_clusters:
+            logger.info("waiting for deleted clusters %s to become inactive...", deleted_clusters)
+            waiter = botocore.waiter.create_waiter_with_client("ClusterInactive", _custom_waiters(), ecs)
+            waiter.wait(clusters=deleted_clusters)
+
+        for ce in matching_ces:
+            ce_name = ce['computeEnvironmentName']
+            try:
+                logger.info("deleting compute environment %s", ce_name)
+                batch.delete_compute_environment(
+                    computeEnvironment=ce_name
+                )
+            except ClientError as clierr:
+                print("error deleting compute environment " + clierr.response['Error'])
+                # if clierr.response['Error']['Message'].endswith("does not exist"):
+                #     pass
+                # else:
+                raise
 
     def wait_ready(self):
         """ensure all the entities are VALID and ready to execute things"""

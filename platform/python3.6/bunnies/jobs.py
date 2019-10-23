@@ -105,6 +105,26 @@ class AWSBatchSimpleJob(object):
         self.job_id = submit_job(self.name, queue_arn, self.jobdef_arn, **self.overrides)['jobId']
         return self.job_id
 
+    def terminate(self, reason=None, client=None):
+        """terminate a STARTING/RUNNING job. if the job hasn't reached the STARTING stage, it is cancelled"""
+        if not self.job_id:
+            return False
+
+        if not client:
+            client = boto3.client('batch')
+        client.cancel_job(jobId=self.job_id, reason=reason if reason is not None else "cancelled by user")
+        return True
+
+    def cancel(self, reason=None, terminate=True, client=None):
+        """ cancel a submitted job"""
+        if not self.job_id:
+            return False
+
+        if not client:
+            client = boto3.client('batch')
+        resp = client.cancel_job(jobId=self.job_id, reason=reason if reason is not None else "cancelled by user")
+        return True
+
     def get_status(self, attempt=-1):
         """
         returns the job status for the matching attempt.
@@ -482,6 +502,12 @@ def _custom_waiters():
                         "expected": True,
                         "argument": "length(jobQueues[]) > `0`",
                         "state": "failure"
+                    },
+                    {
+                        "matcher": "path",
+                        "expected": True,
+                        "argument": "length(jobQueues[]) == `0`",
+                        "state": "success"
                     }
                 ]
             },
@@ -605,6 +631,20 @@ def create_job_role():
                                    PolicyDocument=policy)
     return client.get_role(RoleName=ecs_role_name)
 
+
+def get_jobqueues():
+    """gets all job queues"""
+    client = boto3.client('batch')
+    paginator = client.get_paginator('describe_job_queues')
+    def_iterator = paginator.paginate()
+    found = []
+    for page in def_iterator:
+        page_defs = page['jobQueues']
+        if len(page_defs) == 0:
+            break
+
+        found += page_defs
+    return found
 
 def get_jobqueue(name):
     client = boto3.client('batch')
@@ -947,7 +987,19 @@ def _cmd_save_job_logs(jobid, **kwargs):
         print(" ", dest)
 
 
-def _cmd_show_job_logs(jobid, **kwargs):
+def _cmd_cancel_job(jobid, reason=None, terminate=False, **kwargs):
+    import sys
+    job = AWSBatchSimpleJob.from_job_id(jobid)
+    if not job:
+        sys.stderr.write("job not found %s\n" % (jobid,))
+        return 1
+
+    if terminate:
+        return 0 if job.terminate(reason=reason) else 1
+    return 0 if job.cancel(reason=reason) else 1
+
+
+def _cmd_show_job_logs(jobid, ts=False, **kwargs):
     import sys
 
     job = AWSBatchSimpleJob.from_job_id(jobid)
@@ -961,7 +1013,10 @@ def _cmd_show_job_logs(jobid, **kwargs):
     lines_printed = 0
     for event in job.log_stream(startFromHead=True):
         lines_printed += 1
-        print(_get_time(event['timestamp']), event['message'])
+        if ts:
+            print(_get_time(event['timestamp']), event['message'])
+        else:
+            print(event['message'])
 
     status, job_desc = job.get_status()
 
@@ -1027,6 +1082,14 @@ def configure_parser(main_subparsers):
     subp.set_defaults(func=_cmd_show_job_logs)
     subp.add_argument("jobid", metavar="JOBID", type=str, help="the aws batch id of the job")
     subp.add_argument("--reverse", action="store_true", default=False, help="show the logs in reverse order")
+    subp.add_argument("--ts", action="store_true", default=False)
+
+    subp = subparsers.add_parser("cancel", help="cancel job")
+    subp.add_argument("jobid", metavar="JOBID", type=str, help="the aws batch id of the job")
+    subp.set_defaults(func=_cmd_cancel_job)
+    subp.add_argument("--reason", default=None, help="the reason given -- this will be recorded in the job status")
+    subp.add_argument("--terminate", default=False, action="store_true", dest="terminate",
+                      help="transition to FAILED if the job is RUNNING/STARTING, cancel it if it hasn't transitioned to STARTING yet.")
 
     subp = subparsers.add_parser("usage", help="show job usage")
     subp.set_defaults(func=_cmd_show_job_usage)
