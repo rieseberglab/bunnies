@@ -54,28 +54,30 @@ def _batch_handler(event, context):
         return None
 
     if status not in ("SUCCEEDED", "FAILED"):
-        logger.debug("skipping. state: %s", status)
+        logger.debug("skipping event id %s. state: %s", event['id'], status)
         return None
 
     if 'container' not in detail:
-        logger.debug("skipping. missing container info")
+        logger.debug("skipping event id %s. missing container info", event['id'])
         return None
 
     bunnies_info = _bunnies_info(detail['container'])
     if not bunnies_info:
-        logger.debug("skipping. could not extract platform information")
+        logger.debug("skipping event id %s. could not extract platform information", event['id'])
         return None
 
     if None in [val for val in bunnies_info.values()]:
-        logger.error("platform parameters missing: %s", bunnies_info)
+        logger.error("skipping event id %s. platform parameters missing: %s", event['id'], bunnies_info)
         return None
 
     # version match
     job_version = bunnies_info["BUNNIES_VERSION"]
     if job_version != bunnies.__version__:
-        logger.debug("job has version %s but this lambda is version %s",
-                     job_version, bunnies.__version__)
+        logger.debug("skipping event id %s. job has version %s but this lambda is version %s",
+                     event['id'], job_version, bunnies.__version__)
         return None
+
+    logger.debug("running on event id %s: %s", event['id'], event)
 
     job = bunnies.jobs.AWSBatchSimpleJob.from_job_id(job_id)
     if not job:
