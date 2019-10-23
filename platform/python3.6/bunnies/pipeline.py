@@ -170,6 +170,7 @@ class BuildNode(object):
                 "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                 "BUNNIES_USER_DEPS": user_deps_url,
                 "BUNNIES_JOBID": job_id,
+                "BUNNIES_ATTEMPT": "%d %d" % (1, max_attempts),
                 "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE)
             }
         }
