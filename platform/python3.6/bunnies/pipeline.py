@@ -101,9 +101,7 @@ class BuildNode(object):
         must be called when the currently submitted job is completed.
         we update the total job usage, (and save logs).
         """
-        logs_dir = self.data.output_prefix()
-        self._job.save_logs(dest_url=logs_dir)
-        _, run_usage, _ = self._job.save_usage(dest_url=logs_dir)
+        run_usage = self._job.get_usage()
         self._usage.append(run_usage)
 
     def register_job_definition(self, compute_env):
