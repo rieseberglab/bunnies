@@ -198,7 +198,9 @@ def main():
 
         try:
             log.info("Creating lambda %s...", lambda_name)
-            lambdas.append(lambda_cli.create_function(**updated))
+            created = lambda_cli.create_function(**updated)
+            lambda_arn = created['FunctionArn']
+            lambdas.append(created)
         except ClientError as err:
             if err.response['Error']['Code'] == 'ResourceConflictException':
                 log.info("Creation failed: %s", err)
@@ -215,7 +217,7 @@ def main():
                 log.info("Lambda %s already exists. updating config...", lambda_name)
                 config_update = lambda_cli.update_function_configuration(**updated)
                 lambdas.append(config_update)
-                #log.info("update: %s", config_update)
+                lambda_arn = config_update['FunctionArn']
             else:
                 raise
 
@@ -223,8 +225,6 @@ def main():
             events = boto3.client("events")
         else:
             events = None
-
-        lambda_arn = config_update['FunctionArn']
 
         for event_rule in event_rules:
             log.info("updating event bridge rule: %s to target %s",
