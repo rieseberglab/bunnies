@@ -3,7 +3,8 @@
 """
    usage: update-lambda.py lambda_dir
 """
-import os, os.path
+import os
+import os.path
 import sys
 import argparse
 import zipfile
@@ -15,7 +16,6 @@ import fnmatch
 import errno
 import subprocess
 import shutil
-import fnmatch
 
 import boto3
 from botocore.exceptions import ClientError
@@ -82,6 +82,16 @@ def get_env_override(lambdadir):
     envfd.close()
     return envjson
 
+
+def expand_wildcards(name):
+    if not name:
+        return name
+    # FIXME expand() more generic
+    if "{version}" in name:
+        name = name.replace("{version}", "v" + bunnies.__version__.replace(".", "_"))
+    return name
+
+
 def main():
     setup_logging()
 
@@ -107,6 +117,8 @@ def main():
     with open(os.path.join(args.lambdadir, '.metadata.json'), "r") as metafd:
         metadata = json.load(metafd)
         for definition in metadata:
+            definition['FunctionName'] = expand_wildcards(definition.get('FunctionName'))
+
             lambda_name = definition.get('FunctionName')
             if args.includes:
                 for include_glob in args.includes:
@@ -176,6 +188,8 @@ def main():
         updated['Role'] = role.arn
         updated['Code'] = {'ZipFile': zipdata}
 
+        event_rules = updated.pop('TargetOf', [])
+
         lambda_env_vars = updated.setdefault('Environment', {}).setdefault("Variables", {})
         lambda_env_override = env_override.get(lambda_name, {}).get("Environment", {})
         for env_var, env_val in lambda_env_override.get('Variables', {}).items():
@@ -201,8 +215,41 @@ def main():
                 log.info("Lambda %s already exists. updating config...", lambda_name)
                 config_update = lambda_cli.update_function_configuration(**updated)
                 lambdas.append(config_update)
+                log.info("update: %s", config_update)
             else:
                 raise
+
+        if event_rules:
+            events = boto3.client("events")
+        else:
+            events = None
+
+        lambda_arn = config_update['FunctionArn']
+
+        for event_rule in event_rules:
+            log.info("updating event bridge rule: %s to target %s",
+                     event_rule['Name'], lambda_arn)
+
+            # create/update
+            events.put_rule(Tags=[
+                {'Key': 'platform', 'Value': bunnies.constants.PLATFORM}
+            ], **event_rule)
+
+            # fixme paging iterator
+            response = events.list_targets_by_rule(
+                Rule=event_rule['Name'],
+            )
+            log.info("existing targets on rule %s", response)
+
+            match = [target for target in response['Targets']
+                     if target['Arn'] == lambda_arn]
+            if match:
+                log.info("lambda is already targeted by rule... skipping.")
+            else:
+                events.put_targets(Rule=event_rule['Name'],
+                                   Targets=[{"Id": event_rule['Name'] + "-" + lambda_name,
+                                             "Arn": lambda_arn}])
+
 
 if __name__ == "__main__":
     main()

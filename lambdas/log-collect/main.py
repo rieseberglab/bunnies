@@ -19,7 +19,7 @@ bunnies.setup_logging()
 
 
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def _bunnies_info(container):
@@ -31,13 +31,13 @@ def _bunnies_info(container):
         return None
 
     info = {
-        'BUNNIES_JOB_ID': None,
+        'BUNNIES_JOBID': None,
         'BUNNIES_VERSION': None,
         'BUNNIES_ATTEMPT': None
     }
 
     for env_entry in env:
-        name, val = env_entry['name'], env_entry['val']
+        name, val = env_entry['name'], env_entry['value']
         if name in info:
             info[name] = val
     return info
@@ -46,18 +46,28 @@ def _bunnies_info(container):
 def _batch_handler(event, context):
     """ collect the job logs and usage logs from a completed bunnies batch job """
 
-    job_id, status = event.get('jobId', None), event.get('status', None)
+    detail = event['detail']
+
+    job_id, status = detail.get('jobId', None), detail.get('status', None)
+    if not job_id:
+        logger.error("no jobId: %s", detail)
+        return None
 
     if status not in ("SUCCEEDED", "FAILED"):
+        logger.debug("skipping. state: %s", status)
         return None
 
-    if 'container' not in event:
+    if 'container' not in detail:
+        logger.debug("skipping. missing container info")
         return None
 
-    bunnies_info = _bunnies_info(event['container'])
+    bunnies_info = _bunnies_info(detail['container'])
     if not bunnies_info:
+        logger.debug("skipping. could not extract platform information")
         return None
+
     if None in [val for val in bunnies_info.values()]:
+        logger.error("platform parameters missing: %s", bunnies_info)
         return None
 
     # version match
@@ -72,8 +82,8 @@ def _batch_handler(event, context):
         logger.error("job not found: %s", job_id)
         return None
 
-    usage_url, usage_info, usage_written = job.save_usage()
     logs = job.save_logs()
+    usage_url, usage_info, usage_written = job.save_usage()
 
     return {
         'logs': logs,
@@ -86,6 +96,7 @@ def _batch_handler(event, context):
 def lambda_handler(event, context):
     # Log the received event
     if event.get('source', "") != "aws.batch":
+        logger.error("unexpected event source: %s", event)
         return None
 
     return _batch_handler(event, context)

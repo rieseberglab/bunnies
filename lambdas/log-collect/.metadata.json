@@ -1,6 +1,6 @@
 [
     {
-	"FunctionName": "log-collect",
+	"FunctionName": "log-collect-{version}",
 	"Runtime": "python3.6",
 	"Handler": "main.lambda_handler",
 	"Description": "Saves bunnies job logs and usage logs to S3",
@@ -9,6 +9,13 @@
 	"Environment": {
 	    "Variables": {}
 	},
-	"MemorySize": 128
+	"MemorySize": 128,
+	"TargetOf": [
+	    {
+		"Name": "bunnies-batch-job-done",
+		"EventPattern": "{\"source\":[\"aws.batch\"],\"detail-type\":[\"Batch Job State Change\"]}",
+		"Description": "a batch job changes state -- save logs for bunnies jobs"
+	    }
+	]
     }
 ]
