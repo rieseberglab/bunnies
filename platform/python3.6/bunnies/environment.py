@@ -716,7 +716,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
                     if len(versions) == 0:
                         break
                     for version in versions:
-                        print(version)
+                        #print(version)
                         instance_tags = [specs['Tags'] for specs in version['LaunchTemplateData']['TagSpecifications']
                                          if specs['ResourceType'] == "instance"][0]
 
@@ -806,10 +806,12 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
 
         ec2 = boto3.client('ec2')
         for version in job_template_versions:
-            logger.info("job template: %s", version)
+            logger.info("deleting launch template name=%s version=%s",
+                        version['LaunchTemplateName'],
+                        version['VersionNumber'])
             ec2.delete_launch_template_versions(
-                 LaunchTemplateName=version['LaunchTemplateName'],
-                  Versions=[version['LaunchTemplateVersion']]
+                LaunchTemplateName=version['LaunchTemplateName'],
+                Versions=[str(version['VersionNumber'])]
             )
             # response = client.delete_launch_template(
             #     DryRun=True|False,
