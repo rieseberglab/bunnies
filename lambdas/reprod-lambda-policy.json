@@ -33,7 +33,8 @@
             "Effect": "Allow",
             "Action": [
                 "logs:CreateLogStream",
-                "logs:PutLogEvents"
+                "logs:PutLogEvents",
+		"logs:GetLogEvents"
             ],
             "Resource": "arn:aws:logs:*:*:*"
         },
@@ -46,7 +47,11 @@
         {
             "Sid": "AllowStartingECSTasks",
             "Effect": "Allow",
-            "Action": "ecs:RunTask",
+            "Action": [
+		"ecs:RunTask",
+		"ecs:DescribeContainerInstances",
+		"ecs:DescribeTasks"
+	    ],
             "Resource": "*"
         },
         {
@@ -54,6 +59,13 @@
             "Effect": "Allow",
             "Action": "logs:CreateLogGroup",
             "Resource": "arn:aws:logs:*:*:*"
+        },
+	{
+            "Effect": "Allow",
+            "Action": [
+                "batch:DescribeJobs"
+            ],
+            "Resource": "*"
         }
     ]
 }
