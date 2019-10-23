@@ -161,8 +161,9 @@ class AWSBatchSimpleJob(object):
            Returns:
                 usage_url, usage_info, is_written
 
-           is_written is True if the usage information was written to usage_url
-           (if the usage information already exists, we avoid overwriting if the usage information retrieved is incomplete)
+           is_written is True if the usage information was written to usage_url (if the usage information already
+           exists, we avoid overwriting if the usage information retrieved is incomplete)
+
         """
         job_desc = self._get_desc()
         if not job_desc:
@@ -282,6 +283,13 @@ class AWSBatchSimpleJob(object):
            Call this while the job is running, between attempts, or shortly after the job is complete.
            This call will access information about the ec2 instance, which is only available for a short
            amount of time after the instance/ecs agent is terminated.
+
+          Permissions needed:
+           batch:DescribeJobs
+           batch:DescribeJobQueues
+           batch:DescribeComputeEnvironments
+           ecs:DescribeContainerInstances
+           ec2:DescribeInstances
         """
         batch = boto3.client('batch')
         job_desc = self._get_desc(client=batch)
