@@ -381,11 +381,14 @@ class AWSBatchSimpleJob(object):
             memory_s = 0
             compute_time = 0
             min_time = job_desc['createdAt']
+            min_start_time = float("+inf")
             max_time = 0
 
             for attempt in info['attempts']:
                 if attempt['startedAt'] < min_time:
                     min_time = attempt['startedAt']
+                if attempt['startedAt'] < min_start_time:
+                    min_start_time = attempt['startedAt']
                 if attempt['stoppedAt'] > max_time:
                     max_time = attempt['stoppedAt']
                 attempt_duration = (attempt['stoppedAt'] - attempt['startedAt'])/1000.0
@@ -399,11 +402,12 @@ class AWSBatchSimpleJob(object):
             if min_time == float("+inf"):
                 min_time = 0
                 max_time = 0
-
             total.update(vcpu_secs=vcpu_s,
                          memory_secs=memory_s,
                          compute_time_s=compute_time,
                          total_time_s=(max_time - min_time)/1000.0)
+            info.update(finishedAt=max_time,
+                        startedAt=min_start_time)
 
         usage_obj = {
             'total': {
@@ -414,6 +418,9 @@ class AWSBatchSimpleJob(object):
                 'network': {},       # data transferred over net
                 'credits': 0         # estimation of $ costs
             },
+            'createdAt': job_desc['createdAt'],
+            'startedAt': 0,
+            'finishedAt': 0,
             'attempts': attempt_info
         }
         _update_totals(usage_obj)
@@ -1047,7 +1054,6 @@ def _cmd_show_job_logs(jobid, ts=False, **kwargs):
 
     if status:
         print("exited code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
-
 
     print("run time: %6.3fs (%s)" % (secs, str(run_t)))
     print("from submission: %6.3fs (%s)" % (from_submit, str(submit_t)))
