@@ -20,16 +20,21 @@ log = logging.getLogger(__package__)
 DATA_IMPORT = "data-import"
 DATA_REHASH = "data-rehash"
 
+
 def get_lambda_client():
     """return a client that can wait more than 60 seconds for the result of a lambda"""
     if get_lambda_client.client:
         return get_lambda_client.client
     session = boto3.session.Session()
-    lambda_client = session.client('lambda', config=botocore.config.Config(read_timeout=910, retries={'max_attempts': 0}))
+    lambda_client = session.client('lambda', config=botocore.config.Config(read_timeout=910, retries={
+        'max_attempts': 0
+    }))
     get_lambda_client.client = lambda_client
     return lambda_client
 
+
 get_lambda_client.client = None
+
 
 def default_context():
     """See ClientContext syntax here: https://docs.aws.amazon.com/mobileanalytics/latest/ug/PutEvents.html"""
@@ -54,6 +59,7 @@ def default_context():
         "services": {}
     }
 
+
 def invoke_sync(function_name, client_context=None, Payload=None, LogType='Tail', Qualifier="$LATEST"):
 
     obj_context = default_context()
@@ -76,11 +82,16 @@ def invoke_sync(function_name, client_context=None, Payload=None, LogType='Tail'
         Payload=json.dumps(Payload, separators=(',',':')).encode('ascii')
         Payload=io.BytesIO(Payload)
 
+    # FIXME Oct 23 2019 -- received transient (?) exceptions
+    # botocore.errorfactory.ServiceException: An error occurred (ServiceException) when calling the Invoke operation (reached max retries: 0): Lambda was unable to decrypt the environment variables due to an internal service error.
+    #
+    #
+    # botocore.errorfactory.KMSAccessDeniedException: An error occurred (KMSAccessDeniedException) when calling the Invoke operation (reached max retries: 0): Lambda was unable to decrypt the environment variables because KMS access was denied. Please check the function's KMS key settings. KMS Exception: AccessDeniedExceptionKMS Message: The ciphertext refers to a customer master key that does not exist, does not exist in this region, or you are not allowed to access.
     log.info("Invoking lambda name:%s qualifier:%s", function_name, Qualifier)
-    response = l.invoke(FunctionName=function_name, ClientContext=context_b64, Payload=Payload, LogType=LogType, Qualifier=Qualifier)
+    response = l.invoke(FunctionName=function_name, ClientContext=context_b64, Payload=Payload, LogType=LogType,
+                        Qualifier=Qualifier)
 
     resp_payload = response['Payload']
-
     if 'LogResult' in response:
         response['LogResult'] = base64.b64decode(response['LogResult']).decode('ascii')
     else:
