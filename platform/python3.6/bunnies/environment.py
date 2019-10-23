@@ -113,23 +113,24 @@ def _custom_waiters():
                 "maxAttempts": 40,
                 "acceptors": [
                     {
-                        "expected": "INACTIVE",
-                        "matcher": "pathAll",
-                        "state": "success",
-                        "argument": "clusters[].status"
-                    },
-                    {
                         "expected": "ACTIVE",
                         "matcher": "pathAny",
                         "state": "retry",
                         "argument": "clusters[].status"
                     },
                     {
-                        "matcher": "path",
-                        "expected": True,
-                        "argument": "length(clusters[]) == `0`",
-                        "state": "failure"
+                        "expected": "INACTIVE",
+                        "matcher": "pathAll",
+                        "state": "success",
+                        "argument": "clusters[].status"
                     }
+                    # ,
+                    # {
+                    #     "matcher": "path",
+                    #     "expected": True,
+                    #     "argument": "length(clusters[]) == `0`",
+                    #     "state": "failure"
+                    # }
                 ]
             },
 
@@ -846,7 +847,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
                     computeEnvironment=ce_name
                 )
             except ClientError as clierr:
-                print("error deleting compute environment " + clierr.response['Error'])
+                print("error deleting compute environment " + str(clierr.response['Error']))
                 # if clierr.response['Error']['Message'].endswith("does not exist"):
                 #     pass
                 # else:
