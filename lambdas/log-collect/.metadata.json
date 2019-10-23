@@ -1,0 +1,14 @@
+[
+    {
+	"FunctionName": "log-collect",
+	"Runtime": "python3.6",
+	"Handler": "main.lambda_handler",
+	"Description": "Saves bunnies job logs and usage logs to S3",
+	"Timeout": 300,
+	"Role": "reprod-lambda-role",
+	"Environment": {
+	    "Variables": {}
+	},
+	"MemorySize": 128
+    }
+]
