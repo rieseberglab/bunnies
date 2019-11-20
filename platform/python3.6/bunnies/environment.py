@@ -440,9 +440,9 @@ class FSxDisk(InstanceMount):
 
 class ComputeEnv(object):
 
-    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=512):
+    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=1024):
 
-        #NAME_RE = re.compile("^[-a-zA-Z0-9_]{1,128}$")
+        # NAME_RE = re.compile("^[-a-zA-Z0-9_]{1,128}$")
         valid_name = "".join([x if (x.isalnum() or x in "_-") else "_" for x in name])
         valid_name = valid_name[0:128]
 
@@ -463,7 +463,7 @@ class ComputeEnv(object):
         if local_scratch_gb > 0:
             self.disks['localscratch'] = {
                 'name': "localscratch",
-                'obj': EXT4Disk(self.name + "-localscratch", 512,
+                'obj': EXT4Disk(self.name + "-localscratch", local_scratch_gb,
                                 devname="/dev/xvdd"),
                 'instance_mountpoint': "/mnt/" + self.name + "-localscratch"
             }
