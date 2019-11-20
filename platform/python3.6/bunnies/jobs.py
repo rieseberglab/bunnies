@@ -780,6 +780,9 @@ def make_jobdef(name, job_role_arn, image, vcpus=1, memory=128, mounts=None, reu
             if len(page_defs) == 0:
                 break
 
+            #
+            # skip those that are INACTIVE
+            page_defs = [pdef for pdef in page_defs if pdef['status'] == "ACTIVE"]
             found = [pdef for pdef in page_defs if _deep_matches(match_spec, pdef)]
             if found:
                 break
