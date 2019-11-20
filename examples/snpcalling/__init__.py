@@ -32,6 +32,57 @@ def InputFile(url, desc="", digests=None):
         return bunnies.ExternalFile(url, desc=desc, digests=digests)
 
 
+class Noop(bunnies.Transform):
+    """
+    wait for some amount of time and exit
+    """
+    IMAGE = ANALYTICS_IMAGE
+    VERSION = "1"
+    kind = "snpcalling.Noop"
+    __slots__ = ("wait_time", "exit_code")
+
+    def __init__(self, wait_time=600, exit_code=1, manifest=None):
+        super().__init__("noop", version=self.VERSION, image=self.IMAGE, manifest=manifest)
+
+        if manifest is not None:
+            params = manifest['params']
+            wait_time = params['wait_time']
+            exit_code = params['exit_code']
+
+        self.wait_time = wait_time
+        self.exit_code = exit_code
+        self.params["wait_time"] = wait_time
+        self.params["exit_code"] = exit_code
+
+    @classmethod
+    def task_template(cls, compute_env):
+        return {
+            'jobtype': 'batch',
+            'image': cls.IMAGE
+        }
+
+    def task_resources(self, **kwargs):
+        return {
+            'vcpus': 1,
+            'memory': 512,
+            'timeout': self.wait_time + 20
+        }
+
+    def run(self, **params):
+        """ this runs in the image """
+        import time
+        import sys
+        log.info("sleeping for %s seconds...", self.wait_time)
+        time.sleep(self.wait_time)
+        sys.exit(self.exit_code)
+
+        # no output
+        return {}
+
+
+bunnies.unmarshall.register_kind(Noop)
+
+
 class Align(bunnies.Transform):
     """
     Align a paired-end fastq or sra file against a reference genome
