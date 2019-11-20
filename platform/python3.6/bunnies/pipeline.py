@@ -18,6 +18,7 @@ import json
 import logging
 import io
 import os.path
+import time
 
 log = logging.getLogger(__name__)
 
@@ -47,8 +48,8 @@ class BuildNode(object):
         self._uid = None
         self._output_ready = None
         self._jobdef = None
-        self._sched_node = None
-        self._job = None
+        self._sched_node = None  # surrogate submitted to the scheduler
+        self._job = None         # surrogate submitted to the compute environment
         self._usage = []
 
     @property
@@ -419,33 +420,42 @@ class BuildGraph(object):
         compute_env.create()
         compute_env.wait_ready()
 
-        def _print_execution_status(status_map):
-            num_shown = 5
-            for status in sorted(status_map.keys()):
-                log.info("compute environment summary:")
-                job_summary = [job_id for (job_id, _) in status_map[status][0:num_shown]]
-                log.info("    %-10s (%-3d): %s ...", status.lower(), len(status_map[status]), job_summary)
+        def _running_jobs_by_state(status_map):
+            """return a dictionary summary of ids submitted to the compute environment, by state"""
+            result = {}
+            for state_name in sorted(status_map.keys()):
+                job_ids = {job_obj.job_id: True for (job_obj, _) in status_map[state_name]}
+                result[state_name] = job_ids
+            return result
 
-        def _wait_for_all_jobs(status_map):
-            """we're waiting for all submitted jobs to complete (success/failure)"""
-            _print_execution_status(status_map)
-            incomplete_statuses = [status for status in status_map.keys() if status not in ('SUCCEEDED', 'FAILED')]
-            if incomplete_statuses:
-                incomplete_count = 0
-                for incomplete_status in incomplete_statuses:
-                    incomplete_count += len(status_map[incomplete_status])
-                log.info("waiting for %d more job(s) to complete...", incomplete_count)
-                return False
+        def _scheduled_jobs_by_state(status_map):
+            """return a dictionary summary of job ids tracked by the scheduler, by state"""
+            result = {}
+            for state_name in sorted(status.keys()):
+                node_ids = {node.data.uid: True for node in status[state_name]}
+                result[state_name] = node_ids
+            return result
+
+        def _print_execution_status(status_map, offset="", indent=""):
+            num_shown = 5
+            log.info("submitted:")
+            for status in sorted(status_map.keys()):
+                log.info("%scompute environment summary:", offset)
+                job_summary = [{"id": job_obj.job_id, "name": job_obj.name} for (job_obj, _) in status_map[status][0:num_shown]]
+                log.info("%s%-10s (%-3d): ...", offset, status.lower(), len(status_map[status]))
+                for i, summary in enumerate(job_summary):
+                    log.info("%s%s%-2d. %s %s", offset, indent, i + 1, summary["id"], summary["name"])
+                not_shown = len(status_map[status]) - len(job_summary)
+                if not_shown > 0:
+                    log.info("%s%s... (%d not shown)", offset, indent, not_shown)
+
+        def _wait_once(status_map):
             return True
 
-        def _wait_for_some_jobs(status_map):
-            """we're waiting for at least one job to complete (success/failure)"""
-            _print_execution_status(status_map)
-            if 'SUCCEEDED' in status_map or 'FAILED' in status_map:
-                return True
-            return False
-
         status = {}
+
+        last_scheduler_state = {}
+        last_execution_state = {}
 
         # build loop
         while True:
@@ -465,26 +475,49 @@ class BuildGraph(object):
                 # propagated
                 continue
 
-            log.info("job state summary:")
-            for state_name in sorted(status.keys()):
-                log.info("    %-10s: %d job(s)", state_name, len(status[state_name]))
+            exec_completion = None
 
             if status['submitted']:
                 # check for status of completed jobs
-                exec_completion = compute_env.wait_for_jobs(condition=_wait_for_some_jobs)
+                exec_completion = compute_env.wait_for_jobs(condition=_wait_once)
+
+                running_jobs_changed = False
 
                 success_jobs = exec_completion.get('SUCCEEDED', [])
                 for update_job, _ in success_jobs:
                     sched_node = self.scheduler.get_node(update_job.name)
                     sched_node.data.job_done(True)
                     sched_node.done()
+                    running_jobs_changed = True
 
                 failed_jobs = exec_completion.get('FAILED', [])
                 for update_job, update_reason in failed_jobs:
                     sched_node = self.scheduler.get_node(update_job.name)
                     sched_node.data.job_done(False)
                     sched_node.failed(update_reason)
+                    running_jobs_changed = True
 
+                time.sleep(5.0)
+                if running_jobs_changed:
+                    continue
+
+            # this avoids superfluous job status printing.
+            # we record the state of all jobs and compare with last version printed.
+            current_scheduler_state = _scheduled_jobs_by_state(status)
+            current_execution_state = _running_jobs_by_state(exec_completion) if exec_completion else {}
+
+            if current_scheduler_state != last_scheduler_state or current_execution_state != last_execution_state:
+                log.info("job state summary:")
+                for state_name in sorted(status.keys()):
+                    log.info("    %-10s: %d job(s)", state_name, len(status[state_name]))
+                if exec_completion:
+                    _print_execution_status(exec_completion, indent="    ")
+                last_scheduler_state = current_scheduler_state
+                last_execution_state = current_execution_state
+
+        #
+        # no more jobs can be submitted
+        #
         if status['cancelled']:
             failed_build_nodes = [cancelled.data for cancelled in status['cancelled']
                                   if len(cancelled.failures) > 0]
@@ -494,6 +527,8 @@ class BuildGraph(object):
                     log.info("    job_id=%s name=%s reasons=%s",
                              failed_node._job.job_id, failed_node.job_id,
                              failed_node._sched_node.failures)
+
+            # FIXME -- log job_ids (if failed), their uids, and their final output folder (if applicable)
 
             raise exc.BuildException("one or more targets failed to build")
         else:
