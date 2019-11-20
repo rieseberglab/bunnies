@@ -210,18 +210,111 @@ def wait_batch_ce_ready(ce_names):
     logger.info("batch environments %s are ready", ce_names)
 
 
-class FSxDisk(object):
-    def __init__(self, name, size_gb):
+class InstanceMount(object):
+    def __init__(self, name, size_gb, *args, **kwargs):
         self.name = name
-        self.size_gb = ((size_gb + 3599) // 3600) * 3600
-        if self.size_gb < 3600:
+        self.size_gb = int(size_gb)
+        if self.size_gb < 0:
             raise ValueError("disk size should be larger than 0")
-        self.__token = str(uuid4())
-        self.__fs = None
 
     @property
     def capacity(self):
         return self.size_gb
+
+    # abstract
+    def fstab(self, target):
+        """returns the line that should be added to fstab to mount this filesystem onto the target"""
+        raise NotImplementedError("fstab() not implemented")
+
+    # abstract
+    def mount_command(self, target):
+        """return a command used to mount the device, in array form"""
+        pass
+
+    # abstract
+    def prepare_device(self, target):
+        """return a command to initialize the device, in array form"""
+        pass
+
+    # abstract
+    def allocate(self):
+        """called when a compute environment is created, before jobs are submitted"""
+        pass
+
+    # abstract
+    def wait_allocated(self):
+        """this call should block until the disk is allocated and ready to mount in future instances"""
+        pass
+
+    # abstract
+    def delete(self):
+        """called when a compute environment is being torn down"""
+        pass
+
+    # abstract
+    def wait_deleted(self):
+        """this call should block until the disk's resources have been released"""
+        pass
+
+    # abstract
+    @property
+    def dns_name(self):
+        """return an identifier which can be used to locate the filesystem backing, relative to the instance (or absolute via URL)"""
+        return ""
+
+    # abstract
+    def template_mapping(self):
+        """if this instance disk should modify the instance template, return an EC2 instance template dictionary corresponding
+           to the BlockDeviceMapping section of the template.
+
+        """
+        return None
+
+
+class EXT4Disk(InstanceMount):
+    def __init__(self, name, size_gb, devname="/dev/xvdd", *args, **kwargs):
+        super(EXT4Disk, self).__init__(name, size_gb, *args, **kwargs)
+        self.devname = devname
+
+    def fstab(self, target):
+        return "%(devname)s %(target)s ext4 defaults 0 2" % {
+            'devname': self.devname,
+            'target': target
+        }
+
+    def mount_command(self, target):
+        return ["mount", target]
+
+    def prepare_device(self, target):
+        return ["mkfs.ext4", self.devname]
+
+    @property
+    def dns_name(self):
+        return self.devname
+
+    def template_mapping(self):
+        return {
+            "DeviceName": self.devname,
+            "Ebs": {
+                "Encrypted": False,
+                "DeleteOnTermination": True,
+                "VolumeSize": 512,  # GiB
+                "VolumeType": "st1"
+            }
+        }
+
+
+class FSxDisk(InstanceMount):
+    def __init__(self, *args, **kwargs):
+        super(FSxDisk, self).__init__(*args, **kwargs)
+
+        # size has to be a multiple of 3.6TB
+        self.size_gb = ((self.size_gb + 3599) // 3600) * 3600
+        if self.size_gb < 3600:
+            raise ValueError("disk size should be >= 3600GB")
+
+        self.__token = str(uuid4())
+        self.__fs = None
 
     def retrieve_existing(self):
         # FIXME -- the caller should inspect the state of the returned filesystem
@@ -271,6 +364,9 @@ class FSxDisk(object):
             'target': target
         }
 
+    def mount_command(self, device, target):
+        return ["mount", "-a", "-t", "lustre", "defaults"]
+
     @property
     def fsid(self):
         if not self.__fs:
@@ -295,10 +391,9 @@ class FSxDisk(object):
         client = boto3.client('fsx')
         logger.info("Deleting file system %s (id=%s)...", self.name, fsid)
         client.delete_file_system(FileSystemId=fsid, ClientRequestToken=self.__token)
-        self.__fs=None
+        self.__fs = None
 
-
-    def create(self):
+    def allocate(self):
         """
         creates a new empty disk
         """
@@ -324,7 +419,7 @@ class FSxDisk(object):
             self.__fs = resp['FileSystem']
             logger.info("filesystem %s (id=%s) created", self.name, self.fsid)
 
-    def wait_ready(self):
+    def wait_allocated(self):
         """wait for the filesystem to be in the READY state"""
         logger.info("waiting for filesystem %s (id=%s) to be ready...", self.name, self.fsid)
         client = boto3.client('fsx')
@@ -345,7 +440,7 @@ class FSxDisk(object):
 
 class ComputeEnv(object):
 
-    def __init__(self, name, scratch_size_gb=3600):
+    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=512):
 
         #NAME_RE = re.compile("^[-a-zA-Z0-9_]{1,128}$")
         valid_name = "".join([x if (x.isalnum() or x in "_-") else "_" for x in name])
@@ -358,11 +453,19 @@ class ComputeEnv(object):
         self.submissions = {} # job_name: submitted_job_obj
         self.job_definitions = {} # keyed by (name, image)
 
-        if scratch_size_gb > 0:
+        if global_scratch_gb > 0:
             self.disks['scratch'] = {
                 'name': "scratch",
-                'obj': FSxDisk(self.name + "-scratch", scratch_size_gb),
+                'obj': FSxDisk(self.name + "-scratch", global_scratch_gb),
                 'instance_mountpoint': "/mnt/" + self.name + "-scratch"
+            }
+
+        if local_scratch_gb > 0:
+            self.disks['localscratch'] = {
+                'name': "localscratch",
+                'obj': EXT4Disk(self.name + "-localscratch", 512,
+                                devname="/dev/xvdd"),
+                'instance_mountpoint': "/mnt/" + self.name + "-localscratch"
             }
 
     def register_simple_batch_jobdef(self, name, container_image):
@@ -396,16 +499,27 @@ class ComputeEnv(object):
 
         mount_targets = []
         fstab_lines = []
+        mount_commands = []
+        prepdev_commands = []
+
         for diskname, disk in self.disks.items():
             mount_targets.append(disk['instance_mountpoint'])
             fstab_lines.append(disk['obj'].fstab(disk['instance_mountpoint']))
 
+            mount_cmd = disk['obj'].mount_command(disk['instance_mountpoint'])
+            if mount_cmd:
+                mount_commands.append(mount_cmd)
+
+            prepdev_cmd = disk['obj'].prepare_device(disk['instance_mountpoint'])
+            if prepdev_cmd:
+                prepdev_commands.append(prepdev_cmd)
+
         # this stuff is run by a tool called cloud-init. it's not exactly obvious to debug because it happens early on
-        # in the game. You can see the logs in the instance at /var/log/cloud-init-output.log And the script ends up
-        # being re-formatted into: /var/lib/cloud/instance/scripts/runcmd
+        # in the game. You can see the logs in the instance at /var/log/cloud-init-output.log
         #
-        # the syntax is a bit arcane (it's yaml). contents are extracted and then "shellified" by a python
-        # program and written to the runcmd script, which is then run by /bin/sh as root.
+        # The script ends up being re-formatted from YAML into: /var/lib/cloud/instance/scripts/runcmd. It's worth
+        # inspecting the result... the syntax is a bit arcane (it's yaml). contents are extracted and then "shellified"
+        # by a python program and written to the runcmd script, which is then run by /bin/sh as root.
         #
         # FIXME: disallow whitespace and escapes from names provided by the user.
         #
@@ -424,6 +538,7 @@ runcmd:
 - [ ":", "support both Amazon Linux 1 and 2" ]
 - [ "sh", "-c", "amazon-linux-extras install -y lustre2.10 || yum install -y lustre-client" ]
 %(mkdirs)s
+%(prepdev)s
 %(fstabs)s
 %(mount)s
 
@@ -435,10 +550,11 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
 
 --==MYBOUNDARY==--
 """ % {
-        "mkdirs": _cmdsplit(["[mkdir, -p, %s]" % (mtpoint,) for mtpoint in mount_targets]),
-        "fstabs": _cmdsplit(["""[sh, -c, "echo %s >> /etc/fstab"]""" % (fstab,) for fstab in fstab_lines]),
-        "mount": "- [\":\"]" if len(self.disks) == 0 else """- [mount, "-a", "-t", lustre, defaults]"""
-      }
+            "mkdirs":  _cmdsplit(["[mkdir, -p, %s]" % (mtpoint,) for mtpoint in mount_targets]),
+            "fstabs":  _cmdsplit(["""[sh, -c, "echo %s >> /etc/fstab"]""" % (fstab,) for fstab in fstab_lines]),
+            "mount":   _cmdsplit([repr(mountcmd) for mountcmd in mount_commands]),
+            "prepdev": _cmdsplit([repr(prepcmd) for prepcmd in prepdev_commands])
+        }
 
         logger.debug("using the following instance launch script: %s", script)
         return script
@@ -449,7 +565,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
     def _create_launch_template(self):
         """returns launch template id and version to use"""
 
-        def _matching_template(client, name, tags, userdata_b64):
+        def _matching_template(client, name, tags, device_mappings, userdata_b64):
             """iterate through template versions with that name, and find the first one where
                tags match exactly and the userdata is the same.
             """
@@ -471,12 +587,20 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
                                      if specs['ResourceType'] == "instance"][0]
 
                     check_dict = {x['Key']: x['Value'] for x in instance_tags}
-                    if check_dict == tag_dict:
-                        found = version
-                        break
-                    else:
+                    if check_dict != tag_dict:
                         logger.debug("launch template mismatch. skipping. found %s, but query is %s",
                                      check_dict, tag_dict)
+                        continue
+
+                    if device_mappings:
+                        check_devices = version['LaunchTemplateData']['BlockDeviceMappings']
+                        if device_mappings == check_devices:
+                            found = version
+                            break
+                        else:
+                            logger.debug("launch template mismatch. skipping. found BlockDeviceMappings=%s, but query is %s",
+                                         check_devices, device_mappings)
+                            continue
                 return found
 
         lt_name = self._launch_template_name()
@@ -495,9 +619,16 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         logger.info("creating ec2 launch template %s for environment %s", lt_name, self.name)
 
         b64data = base64.b64encode(lt_userdata.encode("ascii")).decode('ascii')
+
+        device_mappings = []
+        for diskname, disk in self.disks.items():
+            device_mapping = disk['obj'].template_mapping()
+            if device_mapping:
+                device_mappings.append(device_mapping)
+
         call_params = {
             "LaunchTemplateName": lt_name,
-            "VersionDescription": "adds lustre filesystems to default environment",
+            "VersionDescription": "adds storage to default environment",
             "LaunchTemplateData": {
                 "UserData": b64data,
                 "TagSpecifications": [
@@ -505,7 +636,8 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
                         "ResourceType": "instance",
                         "Tags": [{'Key': x[0], 'Value': x[1]} for x in instance_tags]
                     }
-                ]
+                ],
+                "BlockDeviceMappings": device_mappings
             }
         }
 
@@ -526,7 +658,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
 
         if template is None:
             # see if a compatible template exists with the same name
-            template = _matching_template(client, lt_name, instance_tags, b64data)
+            template = _matching_template(client, lt_name, instance_tags, device_mappings, b64data)
             if template is not None:
                 info = template
                 version_number = info['VersionNumber']
@@ -667,7 +799,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         # create disks
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
-            dobj.create()
+            dobj.allocate()
 
         self.batch_ce = self._create_batch_ce()
 
@@ -828,7 +960,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
                 # logger.info("delete response: %s", delete_resp)
                 deleted_clusters.append(ecs_cluster)
             except ClientError as clierr:
-                print("error deleting cluster " + clierr.response['Error'])
+                logger.info("error deleting cluster: %s", clierr.response['Error'], exc_info=clierr)
                 # if clierr.response['Error']['Message'].endswith("does not exist"):
                 #     pass
                 # else:
@@ -857,7 +989,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         """ensure all the entities are VALID and ready to execute things"""
         for name, ddict in self.disks.items():
             dobj = ddict['obj']
-            dobj.wait_ready()
+            dobj.wait_allocated()
 
         wait_batch_ce_ready([self.batch_ce['computeEnvironmentName']])
         jobs.wait_queue_ready([self.job_queue['jobQueueArn']])
