@@ -299,7 +299,7 @@ class EXT4Disk(InstanceMount):
                 "Encrypted": False,
                 "DeleteOnTermination": True,
                 "VolumeSize": 512,  # GiB
-                "VolumeType": "st1"
+                "VolumeType": "gp2" # st1 sucks for small reads (md5sum, align, etc)
             }
         }
 
