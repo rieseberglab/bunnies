@@ -588,19 +588,18 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
 
                     check_dict = {x['Key']: x['Value'] for x in instance_tags}
                     if check_dict != tag_dict:
-                        logger.debug("launch template mismatch. skipping. found %s, but query is %s",
+                        logger.debug("launch template tag mismatch. skipping. found %s, but query is %s",
                                      check_dict, tag_dict)
                         continue
 
                     if device_mappings:
                         check_devices = version['LaunchTemplateData']['BlockDeviceMappings']
-                        if device_mappings == check_devices:
-                            found = version
-                            break
-                        else:
-                            logger.debug("launch template mismatch. skipping. found BlockDeviceMappings=%s, but query is %s",
+                        if device_mappings != check_devices:
+                            logger.debug("launch template block device mismatch. found %s, but query is %s",
                                          check_devices, device_mappings)
                             continue
+                    found = version
+                    break
                 return found
 
         lt_name = self._launch_template_name()
@@ -664,6 +663,9 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
                 version_number = info['VersionNumber']
                 logger.info("reusing existing compatible template %s (id=%s version=%s)",
                             lt_name, template['LaunchTemplateId'], version_number)
+                logger.info("existing template: %s", info)
+                logger.info("matches expected information: name=%s tags=%s devices=%s (b64 user data omitted)",
+                            lt_name, instance_tags, device_mappings)
 
         if template is None:
             # make a new version of the same template
