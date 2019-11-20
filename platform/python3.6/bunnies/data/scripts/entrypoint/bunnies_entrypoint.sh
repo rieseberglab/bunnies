@@ -70,15 +70,15 @@ which unzip >/dev/null 2>&1 || error_exit "Unable to find unzip executable."
 # Create a temporary directory to hold the downloaded contents, and make sure
 CLEANUP_EXTRA=()
 cleanup () {
-   if [[ -z "${KEEP_TMP}" ]] && [[ -n "${TMPDIR}" ]] && [[ "${TMPDIR}" != "/" ]]; then
-       rm -rf --one-file-system -- "${TMPDIR}"
-   fi
+    df -h || :
+    if [[ -z "${KEEP_TMP}" ]] && [[ -n "${TMPDIR}" ]] && [[ "${TMPDIR}" != "/" ]]; then
+	rm -rf --one-file-system -- "${TMPDIR}"
+    fi
 
-   if [[ -z "${KEEP_TMP}" ]] && [[ "${#CLEANUP_EXTRA[@]}" -gt 0 ]]; then
-       rm -rf --one-file-system -- "${CLEANUP_EXTRA[@]}"
-   fi
+    if [[ -z "${KEEP_TMP}" ]] && [[ "${#CLEANUP_EXTRA[@]}" -gt 0 ]]; then
+	rm -rf --one-file-system -- "${CLEANUP_EXTRA[@]}"
+    fi
 }
-trap 'cleanup' EXIT
 
 TMPTEMPLATE="${BUNNIES_JOBID}-XXXXXXX"
 
@@ -104,6 +104,7 @@ fi
 SHARED_TMP="${SCRATCH_ROOT}/tmp"
 mkdir -p "${SHARED_TMP}"
 export TMPDIR=$(mktemp -d -t "$TMPTEMPLATE" -p "${SHARED_TMP}") || error_exit "Failed to create temp directory."
+trap 'cleanup' EXIT
 
 TMPFILE="${TMPDIR}/jobscript"
 install -m 0600 /dev/null "${TMPFILE}" || error_exit "Failed to create temp file."
