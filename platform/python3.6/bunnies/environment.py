@@ -298,7 +298,7 @@ class EXT4Disk(InstanceMount):
             "Ebs": {
                 "Encrypted": False,
                 "DeleteOnTermination": True,
-                "VolumeSize": 512,  # GiB
+                "VolumeSize": self.size_gb,  # GiB
                 "VolumeType": "gp2" # st1 sucks for small reads (md5sum, align, etc)
             }
         }
