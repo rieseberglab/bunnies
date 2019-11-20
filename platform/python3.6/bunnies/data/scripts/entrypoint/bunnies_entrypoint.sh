@@ -83,13 +83,27 @@ trap 'cleanup' EXIT
 TMPTEMPLATE="${BUNNIES_JOBID}-XXXXXXX"
 
 # Some jobs spill temp files into /tmp -- the behavior we see in the container
-# is that tmp gets full and then the filesystem becomes readonly.
-if [[ -d /scratch/ ]] && [[ -w /scratch/ ]]; then
-    mkdir -p /scratch/tmp
-    export TMPDIR=$(mktemp -d -t "$TMPTEMPLATE" -p /scratch/tmp) || error_exit "Failed to create temp directory."
-else
-    export TMPDIR="$(mktemp -d -t "$TMPTEMPLATE")" || error_exit "Failed to create temp directory."
+# is that tmp gets full and then the filesystem becomes readonly. Try to move
+# TMPDIR to one of those locations, in order of preference.
+SCRATCH_CANDIDATES=(
+    /localscratch
+    /scratch
+    /tmp
+)
+SCRATCH_ROOT=""
+for root in "${SCRATCH_CANDIDATES[@]}"; do
+    if [[ -d "$root" ]] && [[ -w "$root" ]]; then
+	SCRATCH_ROOT="$root"
+	break
+    fi
+done
+if [[ -z "$SCRATCH_ROOT" ]]; then
+    SCRATCH_ROOT="/tmp"
 fi
+
+SHARED_TMP="${SCRATCH_ROOT}/tmp"
+mkdir -p "${SHARED_TMP}"
+export TMPDIR=$(mktemp -d -t "$TMPTEMPLATE" -p "${SHARED_TMP}") || error_exit "Failed to create temp directory."
 
 TMPFILE="${TMPDIR}/jobscript"
 install -m 0600 /dev/null "${TMPFILE}" || error_exit "Failed to create temp file."
@@ -103,7 +117,7 @@ fetch_and_run_script () {
   chmod u+x "${TMPFILE}" || error_exit "Failed to chmod script."
 
   : creating workdir
-  BUNNIES_WORKDIR=$(mktemp -d -p "/scratch/" "${BUNNIES_JOBID}-XXXXX")
+  BUNNIES_WORKDIR=$(mktemp -d -p "${SCRATCH_ROOT}/" "${BUNNIES_JOBID}-XXXXX")
   CLEANUP_EXTRA+=("${BUNNIES_WORKDIR}")
   export BUNNIES_WORKDIR
 
@@ -114,7 +128,7 @@ fetch_and_run_script () {
   ulimit -a || :
 
   : environment
-  env
+  env || :
 
   : container metadata
   curl -s -o - "${ECS_CONTAINER_METADATA_URI}" || :
@@ -127,16 +141,22 @@ fetch_and_run_script () {
 }
 
 
-# Download a zip and run a specified script from inside
+# Download the user dependencies zip and run a specified script from
+# inside that folder. If two user dep zips have the same URL, they are
+# assumed to have the same content.
 unpack_user_deps () { # s3_url targetdir
-
-    # Create a temporary file and download the zip file
-    local tmpzip="$(mktemp -t user_deps.XXXXXXX.zip)" || error_exit "cannot create temp file for user deps archive"
-    EXTRA_CLEANUP+=( "$tmpzip" )
-    aws s3 cp "${1}" - > "$tmpzip" || error_exit "Failed to download user deps zip file from ${1}"
-
+    local bname=$(basename "$1")
+    if [[ ! -f "${SHARED_TMP}/$bname" ]]; then
+	# Create a temporary file and download the zip file
+	local tmpzip="$(mktemp -p "${SHARED_TMP}" -t user_deps.XXXXXXX.zip)" || {
+	    error_exit "cannot create temp file for user deps archive"
+	}
+	EXTRA_CLEANUP+=( "$tmpzip" )
+	aws s3 cp "${1}" - > "$tmpzip" || error_exit "Failed to download user deps zip file from ${1}"
+	mv "$tmpzip" "${SHARED_TMP}/$bname"
+    fi
     # Create a temporary directory and unpack the zip file
-    unzip -q -d "${2}" "$tmpzip" || error_exit "Failed to unpack zip file."
+    unzip -q -d "${2}" "${SHARED_TMP}/$bname" || error_exit "Failed to unpack zip file."
 }
 
 if [[ -n "${BUNNIES_USER_DEPS}" ]]; then
