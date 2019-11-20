@@ -737,7 +737,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         comp_resources = {
             "type": ce_type,
             "minvCpus": 0,
-            "maxvCpus": 256,
+            "maxvCpus": 512,
             # desiredvCpus changes dynamically -- we don't match on it.
             #"desiredvCpus": 0,
             "instanceTypes": [
