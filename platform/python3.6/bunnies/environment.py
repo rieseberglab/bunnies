@@ -440,7 +440,7 @@ class FSxDisk(InstanceMount):
 
 class ComputeEnv(object):
 
-    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=1024):
+    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=1280):
 
         # NAME_RE = re.compile("^[-a-zA-Z0-9_]{1,128}$")
         valid_name = "".join([x if (x.isalnum() or x in "_-") else "_" for x in name])
