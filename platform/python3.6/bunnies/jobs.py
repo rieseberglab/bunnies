@@ -2,7 +2,7 @@
 
 import boto3
 from .constants import PLATFORM, JOB_LOGS_PREFIX, JOB_USAGE_FILE
-from .utils import data_files, read_log_stream, get_blob_meta, hash_data
+from .utils import data_files, read_log_stream, get_blob_meta, hash_data, UIOutput
 from .containers import wrap_user_image
 from .config import config
 from .exc import BunniesException, NoSuchFile
@@ -1028,50 +1028,49 @@ def _cmd_show_job_logs(jobid, ts=False, **kwargs):
     def _get_time(ms):
         return datetime.fromtimestamp(ms/1000.0).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-    lines_printed = 0
-    for event in job.log_stream(startFromHead=True):
-        lines_printed += 1
-        if ts:
-            print(_get_time(event['timestamp']), event['message'])
+    with UIOutput() as out_fd:
+        for event in job.log_stream(startFromHead=True):
+            if ts:
+                out_fd.write("%s %s\n" % (_get_time(event['timestamp']), event['message']))
+            else:
+                out_fd.write("%s\n" % (event['message']))
+
+        status, job_desc = job.get_status()
+
+        if not status:
+            sys.stderr.write("status information not yet available\n")
+            if not job_desc.get('startedAt', 0):
+                return 1
+            started_at = job_desc.get('startedAt', 0)
+            stopped_at = job_desc.get('stoppedAt', 0)
         else:
-            print(event['message'])
+            started_at = status.get('startedAt', 0)
+            stopped_at = status.get('stoppedAt', 0)
 
-    status, job_desc = job.get_status()
+        if stopped_at == 0:
+            endtime = time.time() * 1000
+        else:
+            endtime = stopped_at
 
-    if not status:
-        sys.stderr.write("status information not yet available\n")
-        if not job_desc.get('startedAt', 0):
-            return 1
-        started_at = job_desc.get('startedAt', 0)
-        stopped_at = job_desc.get('stoppedAt', 0)
-    else:
-        started_at = status.get('startedAt', 0)
-        stopped_at = status.get('stoppedAt', 0)
+        if 'timeout' in job_desc:
+            timeout_ms = job_desc.get('timeout').get("attemptDurationSeconds") * 1000
+        else:
+            timeout_ms = -1
 
-    if stopped_at == 0:
-        endtime = time.time() * 1000
-    else:
-        endtime = stopped_at
+        secs = (endtime - started_at) / 1000.0
+        from_submit = (endtime - job_desc.get('createdAt', 0)) / 1000.0
+        run_t = timedelta(seconds=secs)
+        submit_t = timedelta(seconds=from_submit)
 
-    if 'timeout' in job_desc:
-        timeout_ms = job_desc.get('timeout').get("attemptDurationSeconds") * 1000
-    else:
-        timeout_ms = -1
+        if status:
+            out_fd.write("exited code: %d  reason: %s\n" % (status['container']['exitCode'], status['statusReason']))
 
-    secs = (endtime - started_at) / 1000.0
-    from_submit = (endtime - job_desc.get('createdAt', 0)) / 1000.0
-    run_t = timedelta(seconds=secs)
-    submit_t = timedelta(seconds=from_submit)
-
-    if status:
-        print("exited code: %d  reason: %s" % (status['container']['exitCode'], status['statusReason']))
-
-    print("run time: %6.3fs (%s)" % (secs, str(run_t)))
-    print("from submission: %6.3fs (%s)" % (from_submit, str(submit_t)))
-    if timeout_ms > 0 and endtime < (started_at + timeout_ms):
-        timeout_secs = (started_at + timeout_ms - endtime) / 1000.0
-        timeout_t = timedelta(seconds=timeout_secs)
-        print("time left: %6.3fs (%s)" % (timeout_secs, str(timeout_t)))
+        out_fd.write("run time: %6.3fs (%s)\n" % (secs, str(run_t)))
+        out_fd.write("from submission: %6.3fs (%s)\n" % (from_submit, str(submit_t)))
+        if timeout_ms > 0 and endtime < (started_at + timeout_ms):
+            timeout_secs = (started_at + timeout_ms - endtime) / 1000.0
+            timeout_t = timedelta(seconds=timeout_secs)
+            out_fd.write("time left: %6.3fs (%s)\n" % (timeout_secs, str(timeout_t)))
 
 
 def _cmd_show_job_usage(jobid, **kwargs):

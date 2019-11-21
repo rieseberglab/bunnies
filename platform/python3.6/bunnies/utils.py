@@ -14,6 +14,7 @@ import base64
 import glob
 import fnmatch
 import subprocess
+import sys
 
 from botocore.exceptions import ClientError
 from .exc import NoSuchFile
@@ -331,3 +332,32 @@ def read_log_stream(log_group_name, stream_name, startTime=None, endTime=None, s
             yield event
 
         extra["nextToken"] = resp[tokenKey]
+
+
+class UIOutput(object):
+    """a writable file descriptor which automatically redirects to a scrollable pager (less) if standard out is a terminal, or
+       stdout itself."""
+    __slots__ = ("sub", "fd", "pager")
+
+    def __init__(self, fileobj=None, pager="/usr/bin/less"):
+        """fileobj is where the output should normally be sent.
+           pager is the absolute path to the program used as the pager.
+        """
+        self.fd = fileobj or sys.stdout
+        self.pager = pager
+        self.sub = None
+
+    def __enter__(self):
+        if self.fd.isatty() and os.path.exists(self.pager) and os.access(self.pager, os.X_OK) and os.path.isfile(self.pager):
+            self.sub = subprocess.Popen([self.pager], bufsize=0, executable=None, stdin=subprocess.PIPE,
+                                        stdout=self.fd, stderr=sys.stderr, shell=False, env=None, universal_newlines=True)
+            return self.sub.stdin
+        return self.fd
+
+    def __exit__(self, typ, value, traceback):
+        if self.sub:
+            self.sub.stdin.close()
+            self.sub.communicate()
+        self.sub = None
+        self.fd = None
+
