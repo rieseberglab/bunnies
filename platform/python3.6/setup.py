@@ -126,7 +126,7 @@ setup(
     # installed, so they must be valid existing projects.
     #
     # For an analysis of "install_requires" vs pip's requirements files see:
-    #https://packaging.python.org/en/latest/requirements.html
+    # https://packaging.python.org/en/latest/requirements.html
     #
     # We do have dependencies, like boto3, but they are included by default
     # in the AWS runtime.
@@ -143,7 +143,10 @@ setup(
     extras_require={  # Optional
         'dev': ['pylint', 'flake8'],
         'lambda': ['requests', 'boto3==1.9.35'],
-        'build': ['requests', 'boto3==1.9.227', 'awscli==1.16.237']
+        'build': ['requests',
+                  'boto3==1.9.227',
+                  'awscli==1.16.237',
+                  'python-dynamodb-lock==0.9.1']
     },
 
     # If there are data files included in your packages that need to be
