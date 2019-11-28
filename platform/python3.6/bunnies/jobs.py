@@ -18,7 +18,7 @@ import io
 
 from datetime import datetime, timedelta
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 logger = logging.getLogger(__name__)
 
 
@@ -916,9 +916,20 @@ def describe_jobs(jobs):
 
     client = boto3.client("batch")
 
+    sleep_time = 10
+
     for c in range(0, (len(jobs) + 99) // 100):
         jobids = jobs[100*c:100*c+100]
-        res = client.describe_jobs(jobs=jobids)
+        res = None
+        attempt = 0
+        while res is None:
+            try:
+                attempt += 1
+                res = client.describe_jobs(jobs=jobids)
+            except EndpointConnectionError:
+                logger.info("Encountered a connection error (attempt=%d). describe_jobs() failed. Retrying in %d seconds...",
+                            attempt, sleep_time)
+                time.sleep(sleep_time)
         all_jobs += res['jobs']
 
     return all_jobs
