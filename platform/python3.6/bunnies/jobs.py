@@ -1073,8 +1073,19 @@ def _cmd_show_job_logs(jobid, ts=False, **kwargs):
         run_t = timedelta(seconds=secs)
         submit_t = timedelta(seconds=from_submit)
 
+        def _unhandled_status(status):
+            out_fd.write("unrecognized status format: %s\n" % (status,))
+            logger.error("unrecognized status format: %s", status)
+
         if status:
-            out_fd.write("exited code: %d  reason: %s\n" % (status['container']['exitCode'], status['statusReason']))
+            # there are times where the job is done, but the container hasn't exited.
+            # e.g. when the instance gets shut down abruptly (by the user, or reclaimed by AWS)
+            if 'container' not in status or 'statusReason' not in status:
+                _unhandled_status(status)
+            elif 'exitCode' not in status['container']:
+                _unhandled_status(status)
+            else:
+                out_fd.write("exited code: %d  reason: %s\n" % (status['container']['exitCode'], status['statusReason']))
 
         out_fd.write("run time: %6.3fs (%s)\n" % (secs, str(run_t)))
         out_fd.write("from submission: %6.3fs (%s)\n" % (from_submit, str(submit_t)))
