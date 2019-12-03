@@ -20,6 +20,9 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--debug", action="store_true", default=False, help="turn on debug logging")
+    parser.add_argument("--maxattempts", metavar="N", dest="max_attempts", default=2, type=int,
+                        help="try to run a job this many times before cancelling it (min 1)")
+
     args = parser.parse_args()
 
     if args.debug:
@@ -83,7 +86,7 @@ def main():
     #
     # Tag all entities with the name of the program
     #
-    pipeline.build(os.path.basename(__file__), local_scratch_gb=100)
+    pipeline.build(os.path.basename(__file__), local_scratch_gb=100, max_attempts=args.max_attempts)
 
     for target in pipeline.targets:
         print(target.data.exists())

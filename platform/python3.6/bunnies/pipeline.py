@@ -463,6 +463,12 @@ class BuildGraph(object):
             "build_id": run_name + "." + str(uuid.uuid4())
         }
 
+        if build_args:
+            raise ValueError("unrecognized parameters: %s" % (build_args,))
+
+        if schedule_opts["max_attempts"] <= 0:
+            raise ValueError("max attempts must be >= 0")
+
         compute_env = ComputeEnv(run_name, **env_args)
 
         nodei = -1
