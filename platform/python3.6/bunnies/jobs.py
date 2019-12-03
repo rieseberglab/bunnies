@@ -22,6 +22,15 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 logger = logging.getLogger(__name__)
 
 
+def batch_client():
+    if not batch_client.client:
+        batch_client.client = boto3.client('batch')
+    return batch_client.client
+
+
+batch_client.client = None
+
+
 class AWSBatchSimpleJobDef(object):
     def __init__(self, name, image_name):
         self.name = name
@@ -72,10 +81,11 @@ class AWSBatchSimpleJob(object):
         self.overrides = overrides
         self.job = None
         self.job_id = None
+        self.foreign = False
 
-    def _get_desc(self, client=None):
+    def get_desc(self, client=None):
         if client is None:
-            client = boto3.client('batch')
+            client = batch_client()
 
         jobs = client.describe_jobs(
             jobs=[self.job_id]
@@ -86,11 +96,12 @@ class AWSBatchSimpleJob(object):
 
     @classmethod
     def from_job_id(cls, job_id):
-        client = boto3.client('batch')
+        client = batch_client()
         job_descs = client.describe_jobs(
             jobs=[job_id]
         )['jobs']
         if not job_descs:
+            logger.debug("no batch jobs match id %s", job_id)
             return None
         job_desc = job_descs[0]
         job_name = job_desc['jobName']
@@ -111,7 +122,7 @@ class AWSBatchSimpleJob(object):
             return False
 
         if not client:
-            client = boto3.client('batch')
+            client = batch_client()
         client.cancel_job(jobId=self.job_id, reason=reason if reason is not None else "cancelled by user")
         return True
 
@@ -121,7 +132,7 @@ class AWSBatchSimpleJob(object):
             return False
 
         if not client:
-            client = boto3.client('batch')
+            client = batch_client()
         resp = client.cancel_job(jobId=self.job_id, reason=reason if reason is not None else "cancelled by user")
         return True
 
@@ -142,7 +153,7 @@ class AWSBatchSimpleJob(object):
                     "statusReason": "Essential container in task exited"
         }
         """
-        job_desc = self._get_desc()
+        job_desc = self.get_desc()
         if not job_desc:
             return None, None
 
@@ -165,7 +176,7 @@ class AWSBatchSimpleJob(object):
            exists, we avoid overwriting if the usage information retrieved is incomplete)
 
         """
-        job_desc = self._get_desc()
+        job_desc = self.get_desc()
         if not job_desc:
             raise BunniesException("cannot retrieve job information %s" % (self.job_id,))
 
@@ -220,7 +231,7 @@ class AWSBatchSimpleJob(object):
            if the destination url is omitted, it is extracted from the bunnies output directory for the
            job
         """
-        job_desc = self._get_desc()
+        job_desc = self.get_desc()
         if not job_desc:
             raise BunniesException("cannot retrieve job information %s" % (self.job_id,))
 
@@ -291,8 +302,8 @@ class AWSBatchSimpleJob(object):
            ecs:DescribeContainerInstances
            ec2:DescribeInstances
         """
-        batch = boto3.client('batch')
-        job_desc = self._get_desc(client=batch)
+        batch = batch_client()
+        job_desc = self.get_desc(client=batch)
         if not job_desc:
             raise BunniesException("cannot retrieve job information %s" % (self.job_id,))
 
@@ -441,7 +452,7 @@ class AWSBatchSimpleJob(object):
 
            startTime and endTime are in ms.
         """
-        job_desc = self._get_desc()
+        job_desc = self.get_desc()
         if not job_desc:
             return None
 
@@ -649,7 +660,7 @@ def create_job_role():
 
 def get_jobqueues():
     """gets all job queues"""
-    client = boto3.client('batch')
+    client = batch_client()
     paginator = client.get_paginator('describe_job_queues')
     def_iterator = paginator.paginate()
     found = []
@@ -662,7 +673,7 @@ def get_jobqueues():
     return found
 
 def get_jobqueue(name):
-    client = boto3.client('batch')
+    client = batch_client()
     jq = client.describe_job_queues(
         jobQueues=[name]
     )
@@ -675,7 +686,7 @@ def wait_queue_disabled(queueNames):
         return
 
     logger.info("waiting for queue(s) %s to be disabled...", queueNames)
-    client = boto3.client('batch')
+    client = batch_client()
     waiter = botocore.waiter.create_waiter_with_client("JobQueueDisabled", _custom_waiters(), client)
     waiter.wait(jobQueues=queueNames)
     logger.info("queue(s) %s disabled", queueNames)
@@ -686,7 +697,7 @@ def wait_queue_ready(queueNames):
         return
 
     logger.info("waiting for queue(s) %s to be ready...", queueNames)
-    client = boto3.client('batch')
+    client = batch_client()
     waiter = botocore.waiter.create_waiter_with_client("JobQueueReady", _custom_waiters(), client)
     waiter.wait(jobQueues=queueNames)
     logger.info("queue(s) %s ready", queueNames)
@@ -707,7 +718,7 @@ def make_jobqueue(name, priority=100, compute_envs=()):
     if not compute_envs or len(compute_envs) == 0:
         raise ValueError("must specify at least one compute environment")
 
-    client = boto3.client('batch')
+    client = batch_client()
     try:
         jq = client.create_job_queue(state='ENABLED',
                                      jobQueueName=name,
@@ -747,7 +758,7 @@ def make_jobdef(name, job_role_arn, image, vcpus=1, memory=128, mounts=None, reu
       memory: default amount of memory in MB
       mounts: [{ name: "foo", "host_src": "/path/on/host", "dst": "/path/in/container" }, ...]
     """
-    client = boto3.client('batch')
+    client = batch_client()
 
     def _deep_matches(expected, obj):
         """extracts fields of the job definition that should be compared for equality"""
@@ -880,7 +891,7 @@ def submit_job(name, queue, jobdef, command=None, vcpus=None, memory=None, envir
                  "memory": memory,
                  "command": command
                 })
-    client = boto3.client('batch')
+    client = batch_client()
 
     cont_overrides = {}
     if command is not None:
