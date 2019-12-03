@@ -128,7 +128,7 @@ class BuildNode(object):
             return
         log.warn("no job definition registered for build node: %s", self.data)
 
-    def schedule(self, compute_env, scheduler_node, submitter_name):
+    def schedule(self, compute_env, scheduler_node, build_id="", **kwargs):
         """schedule this build node to execute on the compute_env compute
            environment. The scheduler node provides historical information"""
 
@@ -138,12 +138,16 @@ class BuildNode(object):
         # this id is globally unique
         job_id = self.job_id
 
-        log.debug("scheduling job %s...", job_id)
+        if not build_id:
+            build_id = str(uuid.uuid4())
+
+        max_attempts = kwargs.pop("max_attempts", 1)
+
+        log.debug("build %s scheduling job %s...", build_id, job_id)
         assert self._attempt is None
 
         def _submit_new_job(ctx, attempt=1):
             # fixme calculate attempts:
-            max_attempts = 1
             if attempt > max_attempts:
                 # allow the next try to start from attempt==1
                 log.debug("  maximum number of attempts (%d) exceeded. cancelling job.", max_attempts)
@@ -187,9 +191,9 @@ class BuildNode(object):
                     "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                     "BUNNIES_USER_DEPS": user_deps_url,
                     "BUNNIES_JOBID": job_id,
-                    "BUNNIES_ATTEMPT": "%d %d" % (1, max_attempts),
+                    "BUNNIES_ATTEMPT": "%d %d" % (attempt, max_attempts),
                     "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE),
-                    "BUNNIES_SUBMITTER": submitter_name
+                    "BUNNIES_SUBMITTER": build_id
                 }
             }
 
@@ -202,7 +206,7 @@ class BuildNode(object):
             ctx.jobtype = "batch"
             ctx.jobdata = self._attempt.job_id
             ctx.jobattempt = attempt
-            ctx.submitter = submitter_name
+            ctx.submitter = build_id
             ctx.save()
             scheduler_node.submit()  # tell the bunnies scheduler that the job has been submitted
             return
@@ -213,7 +217,7 @@ class BuildNode(object):
             scheduler_node.submit()  # tell the bunnies scheduler that the job has been submitted
             return
 
-        with kvstore.submit_lock_context(submitter_name, job_id) as ctx:
+        with kvstore.submit_lock_context(build_id, job_id) as ctx:
             ctx.load()
             if ctx.jobtype != "batch":
                 raise ValueError("unhandled job type")
@@ -444,27 +448,35 @@ class BuildGraph(object):
             for node in target.postorder(prune_fn=_already_built):
                 yield node
 
-    def build(self, run_name, **env_args):
+    def build(self, run_name, **build_args):
         """run all the jobs that need to be run. managed resources created to build the chosen targets will be tagged with the
         given run_name. reusing the same name on a subsequent run will allow resources to be reused.
         """
 
+        env_args = {
+            "global_scratch_gb": build_args.pop("global_scratch_gb", 0),
+            "local_scratch_gb": build_args.pop("local_scratch_gb", 1280)
+        }
+
+        schedule_opts = {
+            "max_attempts": build_args.pop("max_attempts", 3),
+            "build_id": run_name + "." + str(uuid.uuid4())
+        }
+
         compute_env = ComputeEnv(run_name, **env_args)
 
-        unique_run_name = run_name + "." + str(uuid.uuid4())
-
         nodei = -1
-        for nodei, node in enumerate(self.build_order()):
+        for nodei, build_node in enumerate(self.build_order()):
             # check compatibility with compute_environment
             # wrap container images.
             # create schedulable entities
-            job_def = node.register_job_definition(compute_env)
+            build_node.register_job_definition(compute_env)
 
-            sched_node = self.scheduler.add_node(node.job_id, node)
-            node._sched_node = sched_node
+            sched_node = self.scheduler.add_node(build_node.job_id, build_node)
+            build_node._sched_node = sched_node
 
             # inform scheduler of graph dependencies
-            for dep in node.deps:
+            for dep in build_node.deps:
                 # nodes are iterated in dependency order. Just consider
                 # nodes which have to be built. skip those which aren't
                 # part of build order
@@ -536,7 +548,7 @@ class BuildGraph(object):
             if status['ready']:
                 for sched_node in status['ready']:
                     build_node = sched_node.data
-                    build_node.schedule(compute_env, sched_node, unique_run_name)
+                    build_node.schedule(compute_env, sched_node, **schedule_opts)
                 # jobs have either been submitted or cancelled. states have
                 # propagated
                 continue
