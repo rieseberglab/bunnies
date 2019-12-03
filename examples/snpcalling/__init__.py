@@ -125,7 +125,7 @@ class Align(bunnies.Transform):
 
     @classmethod
     def task_template(cls, compute_env):
-        scratchdisk = compute_env.get_disk('scratch')
+        scratchdisk = compute_env.get_disk('scratch') or compute_env.get_disk('localscratch')
         if not scratchdisk:
             raise Exception("Align tasks require a scratch disk")
 
@@ -157,7 +157,7 @@ class Align(bunnies.Transform):
         s3_output_prefix = self.output_prefix()
         local_output_dir = os.path.join(workdir, "output")
 
-        cas_dir = "/scratch/cas"
+        cas_dir = "/localscratch/cas"
         os.makedirs(cas_dir, exist_ok=True)
         os.makedirs(local_output_dir, exist_ok=True)
 
@@ -167,8 +167,8 @@ class Align(bunnies.Transform):
         ], show_out=True)
 
         #
-        # download reference in /scratch
-        # /scratch is shared with other jobs in the same compute environment
+        # download reference in /localscratch
+        # /localscratch is shared with other jobs in the same compute environment
         #
         ref_target = self.ref.ls()
         ref_idx_target = self.ref_idx.ls()
@@ -278,7 +278,7 @@ class Merge(bunnies.Transform):
 
     @classmethod
     def task_template(cls, compute_env):
-        scratchdisk = compute_env.get_disk('scratch')
+        scratchdisk = compute_env.get_disk('scratch') or compute_env.get_disk('localscratch')
         if not scratchdisk:
             raise Exception("Merge tasks require a scratch disk")
 
