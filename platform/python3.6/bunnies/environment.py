@@ -475,6 +475,18 @@ class ComputeEnv(object):
             self.job_definitions[(name, container_image)] = batch_def
         return self.job_definitions[(name, container_image)]
 
+    def track_existing_job(self, job_obj):
+        job_name = job_obj.name
+
+        if job_name in self.submissions:
+            logger.debug("job name already tracked %s", job_name)
+
+        if not job_obj.job_id:
+            raise ValueError("job object has no id")
+
+        self.submissions[job_name] = job_obj
+        return job_obj
+
     def submit_simple_batch_job(self, job_name, job_def, **job_params):
         if job_name in self.submissions:
             raise ValueError("a job with that name has already been submitted: %s", job_name)
