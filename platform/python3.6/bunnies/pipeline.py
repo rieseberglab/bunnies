@@ -6,6 +6,8 @@
 from . import runtime
 from . import exc
 from . import constants
+from . import kvstore
+from .jobs import AWSBatchSimpleJob
 from .version import __version__
 from .graph import Cacheable, Transform, Target
 from .environment import ComputeEnv
@@ -19,6 +21,7 @@ import logging
 import io
 import os.path
 import time
+import uuid
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +43,8 @@ class PipelineException(Exception):
 
 class BuildNode(object):
     """graph of buildable things with dependencies"""
-    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef", "_sched_node", "_job", "_usage")
+    __slots__ = ("data", "deps", "_uid", "_output_ready", "_jobdef",
+                 "_sched_node", "_attempt", "_attempt_ids", "_usage")
 
     def __init__(self, data):
         self.data = data  # Cacheable
@@ -49,7 +53,8 @@ class BuildNode(object):
         self._output_ready = None
         self._jobdef = None
         self._sched_node = None  # surrogate submitted to the scheduler
-        self._job = None         # surrogate submitted to the compute environment
+        self._attempt = None     # surrogate submitted to the compute environment
+        self._attempt_ids = []
         self._usage = []
 
     @property
@@ -102,8 +107,11 @@ class BuildNode(object):
         must be called when the currently submitted job is completed.
         we update the total job usage, (and save logs).
         """
-        run_usage = self._job.get_usage()
+        run_usage = self._attempt.get_usage()
         self._usage.append(run_usage)
+
+        log.debug("job_done job_id=%s success=%s (last attempt %s", self.job_id, success, self._attempt_ids[-1])
+        self._attempt = None
 
     def register_job_definition(self, compute_env):
         # FIXME -- the compute environment should register the job definition lazily.
@@ -120,66 +128,123 @@ class BuildNode(object):
             return
         log.warn("no job definition registered for build node: %s", self.data)
 
-    def schedule(self, compute_env, scheduler_node):
+    def schedule(self, compute_env, scheduler_node, submitter_name):
+        """schedule this build node to execute on the compute_env compute
+           environment. The scheduler node provides historical information"""
+
         if not isinstance(self.data, Transform):
             raise NotImplementedError("cannot schedule non-Transform objects")
-
-        # fixme calculate attempts:
-        max_attempts = 1
-        if len(scheduler_node.failures) >= max_attempts:
-            scheduler_node.cancel()
-            return
-
-        assert self._job is None
 
         # this id is globally unique
         job_id = self.job_id
 
-        # let the user's object calculate its resource requirements
-        resources = self.data.task_resources() or {}
+        log.debug("scheduling job %s...", job_id)
+        assert self._attempt is None
 
-        remote_script_url = "s3://%(bucket)s/jobs/%(envname)s/%(jobid)s/jobscript" % {
-            "bucket": config['storage']['tmp_bucket'],
-            "envname": compute_env.name,
-            "jobid": job_id
-        }
+        def _submit_new_job(ctx, attempt=1):
+            # fixme calculate attempts:
+            max_attempts = 1
+            if attempt > max_attempts:
+                # allow the next try to start from attempt==1
+                log.debug("  maximum number of attempts (%d) exceeded. cancelling job.", max_attempts)
+                ctx.jobdata = ""
+                ctx.jobattempt = 0
+                ctx.save()
+                scheduler_node.cancel()
+                return
 
-        user_deps_prefix = "s3://%(bucket)s/user_context/%(envname)s/" % {
-            "bucket": config['storage']['tmp_bucket'],
-            "envname": compute_env.name,
-            "jobid": job_id
-        }
+            # let the user's object calculate its resource requirements
+            resources = self.data.task_resources(attempt=attempt) or {}
 
-        user_deps_url = runtime.upload_user_context(user_deps_prefix)
-
-        with io.BytesIO() as exec_fp:
-            script_len = exec_fp.write(self.execution_transfer_script(resources).encode('utf-8'))
-            exec_fp.seek(0)
-            log.debug("uploading job script for job_id %s at %s ...", job_id, remote_script_url)
-            s3_streaming_put(exec_fp, remote_script_url, content_type="text/x-python", content_length=script_len,
-                             logprefix=job_id + " jobscript ")
-
-        settings = {
-            'vcpus': resources.get('vcpus', None),
-            'memory': resources.get('memory', None),
-            'timeout': resources.get('timeout', -1),
-            'environment': {
-                "BUNNIES_VERSION": __version__,
-                "BUNNIES_SUBMIT_TIME": str(int(datetime.utcnow().timestamp()*1000)),
-                "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
-                "BUNNIES_USER_DEPS": user_deps_url,
-                "BUNNIES_JOBID": job_id,
-                "BUNNIES_ATTEMPT": "%d %d" % (1, max_attempts),
-                "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE)
+            remote_script_url = "s3://%(bucket)s/jobs/%(envname)s/%(jobid)s/jobscript" % {
+                "bucket": config['storage']['tmp_bucket'],
+                "envname": compute_env.name,
+                "jobid": job_id
             }
-        }
 
-        if settings.get('timeout') <= 0:
-            settings['timeout'] = 24*3600*7 # 7 days
+            user_deps_prefix = "s3://%(bucket)s/user_context/%(envname)s/" % {
+                "bucket": config['storage']['tmp_bucket'],
+                "envname": compute_env.name,
+                "jobid": job_id
+            }
 
-        self._job = compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
-        scheduler_node.submit()
-        return
+            user_deps_url = runtime.upload_user_context(user_deps_prefix)
+
+            with io.BytesIO() as exec_fp:
+                script_len = exec_fp.write(self.execution_transfer_script(resources).encode('utf-8'))
+                exec_fp.seek(0)
+                log.debug("  uploading job script for job_id %s at %s ...", job_id, remote_script_url)
+                s3_streaming_put(exec_fp, remote_script_url, content_type="text/x-python", content_length=script_len,
+                                 logprefix=job_id + " jobscript ")
+
+            settings = {
+                'vcpus': resources.get('vcpus', None),
+                'memory': resources.get('memory', None),
+                'timeout': resources.get('timeout', -1),
+                'environment': {
+                    "BUNNIES_VERSION": __version__,
+                    "BUNNIES_SUBMIT_TIME": str(int(datetime.utcnow().timestamp()*1000)),
+                    "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
+                    "BUNNIES_USER_DEPS": user_deps_url,
+                    "BUNNIES_JOBID": job_id,
+                    "BUNNIES_ATTEMPT": "%d %d" % (1, max_attempts),
+                    "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE),
+                    "BUNNIES_SUBMITTER": submitter_name
+                }
+            }
+
+            if settings.get('timeout') <= 0:
+                settings['timeout'] = 24*3600*7 # 7 days
+
+            self._attempt = compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
+            self._attempt_ids.append(self._attempt.job_id)
+            # commit the new batch job id to the global kv store
+            ctx.jobtype = "batch"
+            ctx.jobdata = self._attempt.job_id
+            ctx.jobattempt = attempt
+            ctx.submitter = submitter_name
+            ctx.save()
+            scheduler_node.submit()  # tell the bunnies scheduler that the job has been submitted
+            return
+
+        def _reuse_existing(ctx, job_obj):
+            self._attempt = compute_env.track_existing_job(job_obj)
+            self._attempt_ids.append(self._attempt.job_id)
+            scheduler_node.submit()  # tell the bunnies scheduler that the job has been submitted
+            return
+
+        with kvstore.submit_lock_context(submitter_name, job_id) as ctx:
+            ctx.load()
+            if ctx.jobtype != "batch":
+                raise ValueError("unhandled job type")
+
+            if not ctx.jobdata:
+                # has never been submitted
+                log.debug("  job %s has not yet been submitted", job_id)
+                return _submit_new_job(ctx, attempt=1)
+            else:
+                log.debug("  job %s has an existing submission: %s", job_id, ctx.jobdata)
+
+            last_attempt_id = ctx.jobdata
+            last_attempt_no = ctx.jobattempt
+
+            # see if it's still tracked by AWS Batch
+            job_obj = AWSBatchSimpleJob.from_job_id(last_attempt_id)
+            if not job_obj:
+                # no longer tracked
+                log.debug("  job information no longer available for %s. submitting new.", last_attempt_id)
+                return _submit_new_job(ctx, attempt=1)
+
+            job_desc = job_obj.get_desc()
+            job_status = job_desc['status']
+            if job_status == "FAILED":
+                log.debug("  %s state=%s attempt=%d. submitting new attempt=%d",
+                          last_attempt_id, job_status, last_attempt_no, last_attempt_no + 1)
+                return _submit_new_job(ctx, attempt=last_attempt_no + 1)
+            else:
+                log.debug("  %s state=%s attempt=%d. can be reused",
+                          last_attempt_id, job_status, last_attempt_no)
+                return _reuse_existing(ctx, job_obj)
 
     def execution_transfer_script(self, resources):
         """
@@ -274,7 +339,6 @@ class BuildGraph(object):
         self.targets = []
 
         self.scheduler = Scheduler()
-
 
     def _dealias(self, obj, path=None):
         """
@@ -380,12 +444,14 @@ class BuildGraph(object):
             for node in target.postorder(prune_fn=_already_built):
                 yield node
 
-    def build(self, run_name):
+    def build(self, run_name, **env_args):
         """run all the jobs that need to be run. managed resources created to build the chosen targets will be tagged with the
         given run_name. reusing the same name on a subsequent run will allow resources to be reused.
         """
 
-        compute_env = ComputeEnv(run_name)
+        compute_env = ComputeEnv(run_name, **env_args)
+
+        unique_run_name = run_name + "." + str(uuid.uuid4())
 
         nodei = -1
         for nodei, node in enumerate(self.build_order()):
@@ -470,7 +536,7 @@ class BuildGraph(object):
             if status['ready']:
                 for sched_node in status['ready']:
                     build_node = sched_node.data
-                    build_node.schedule(compute_env, sched_node)
+                    build_node.schedule(compute_env, sched_node, unique_run_name)
                 # jobs have either been submitted or cancelled. states have
                 # propagated
                 continue
@@ -525,7 +591,7 @@ class BuildGraph(object):
                 log.info("failed jobs (%3d):", len(failed_build_nodes))
                 for failed_node in failed_build_nodes:
                     log.info("    job_id=%s name=%s reasons=%s",
-                             failed_node._job.job_id, failed_node.job_id,
+                             failed_node._attempt_ids[-1], failed_node.job_id,
                              failed_node._sched_node.failures)
 
             # FIXME -- log job_ids (if failed), their uids, and their final output folder (if applicable)
