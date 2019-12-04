@@ -8,6 +8,6 @@ def setup_logging(loglevel=logging.INFO):
     root.setLevel(loglevel)
     ch = logging.StreamHandler(sys.stderr)
     ch.setLevel(loglevel)
-    formatter = logging.Formatter('[%(asctime)s] %(name)s %(levelname)s - %(message)s')
+    formatter = logging.Formatter('[%(asctime)s] %(name)s %(levelname)s %(message)s')
     ch.setFormatter(formatter)
     root.addHandler(ch)
