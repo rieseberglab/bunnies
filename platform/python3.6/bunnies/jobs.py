@@ -82,6 +82,7 @@ class AWSBatchSimpleJob(object):
         self.job = None
         self.job_id = None
         self.foreign = False
+        self.meta = {}
 
     def get_desc(self, client=None):
         if client is None:

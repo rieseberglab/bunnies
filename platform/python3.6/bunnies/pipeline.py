@@ -146,10 +146,10 @@ class BuildNode(object):
         log.debug("build %s scheduling job %s...", build_id, job_id)
         assert self._attempt is None
 
-        def _submit_new_job(ctx, attempt=1):
+        def _submit_new_job(ctx, attempt_no=1):
             # fixme calculate attempts:
-            if attempt > max_attempts:
-                # allow the next try to start from attempt==1
+            if attempt_no > max_attempts:
+                # allow the next try to start from attempt_no==1
                 log.debug("  maximum number of attempts (%d) exceeded. cancelling job.", max_attempts)
                 ctx.jobdata = ""
                 ctx.jobattempt = 0
@@ -158,7 +158,7 @@ class BuildNode(object):
                 return
 
             # let the user's object calculate its resource requirements
-            resources = self.data.task_resources(attempt=attempt) or {}
+            resources = self.data.task_resources(attempt=attempt_no) or {}
 
             remote_script_url = "s3://%(bucket)s/jobs/%(envname)s/%(jobid)s/jobscript" % {
                 "bucket": config['storage']['tmp_bucket'],
@@ -191,7 +191,7 @@ class BuildNode(object):
                     "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                     "BUNNIES_USER_DEPS": user_deps_url,
                     "BUNNIES_JOBID": job_id,
-                    "BUNNIES_ATTEMPT": "%d %d" % (attempt, max_attempts),
+                    "BUNNIES_ATTEMPT": "%d %d" % (attempt_no, max_attempts),
                     "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE),
                     "BUNNIES_SUBMITTER": build_id
                 }
@@ -201,19 +201,21 @@ class BuildNode(object):
                 settings['timeout'] = 24*3600*7 # 7 days
 
             self._attempt = compute_env.submit_simple_batch_job(job_id, self._jobdef, **settings)
-            self._attempt_ids.append(self._attempt.job_id)
+            self._attempt.meta['attempt_no'] = attempt_no
+            self._attempt_ids.append({'attempt_no': attempt_no, 'job_id': self._attempt.job_id})
             # commit the new batch job id to the global kv store
             ctx.jobtype = "batch"
             ctx.jobdata = self._attempt.job_id
-            ctx.jobattempt = attempt
+            ctx.jobattempt = attempt_no
             ctx.submitter = build_id
             ctx.save()
             scheduler_node.submit()  # tell the bunnies scheduler that the job has been submitted
             return
 
-        def _reuse_existing(ctx, job_obj):
+        def _reuse_existing(ctx, job_obj, attempt_no):
+            job_obj.meta['attempt_no'] = attempt_no
             self._attempt = compute_env.track_existing_job(job_obj)
-            self._attempt_ids.append(self._attempt.job_id)
+            self._attempt_ids.append({'attempt_no': attempt_no, 'job_id': self._attempt.job_id})
             scheduler_node.submit()  # tell the bunnies scheduler that the job has been submitted
             return
 
@@ -225,30 +227,30 @@ class BuildNode(object):
             if not ctx.jobdata:
                 # has never been submitted
                 log.debug("  job %s has not yet been submitted", job_id)
-                return _submit_new_job(ctx, attempt=1)
+                return _submit_new_job(ctx, attempt_no=1)
             else:
                 log.debug("  job %s has an existing submission: %s", job_id, ctx.jobdata)
 
             last_attempt_id = ctx.jobdata
-            last_attempt_no = ctx.jobattempt
+            last_attempt_no = int(ctx.jobattempt)
 
             # see if it's still tracked by AWS Batch
             job_obj = AWSBatchSimpleJob.from_job_id(last_attempt_id)
             if not job_obj:
                 # no longer tracked
                 log.debug("  job information no longer available for %s. submitting new.", last_attempt_id)
-                return _submit_new_job(ctx, attempt=1)
+                return _submit_new_job(ctx, attempt_no=1)
 
             job_desc = job_obj.get_desc()
             job_status = job_desc['status']
             if job_status == "FAILED":
                 log.debug("  %s state=%s attempt=%d. submitting new attempt=%d",
                           last_attempt_id, job_status, last_attempt_no, last_attempt_no + 1)
-                return _submit_new_job(ctx, attempt=last_attempt_no + 1)
+                return _submit_new_job(ctx, attempt_no=last_attempt_no + 1)
             else:
                 log.debug("  %s state=%s attempt=%d. can be reused",
                           last_attempt_id, job_status, last_attempt_no)
-                return _reuse_existing(ctx, job_obj)
+                return _reuse_existing(ctx, job_obj, last_attempt_no)
 
     def execution_transfer_script(self, resources):
         """
@@ -525,10 +527,12 @@ class BuildGraph(object):
             log.info("submitted:")
             for status in sorted(status_map.keys()):
                 log.info("%scompute environment summary:", offset)
-                job_summary = [{"id": job_obj.job_id, "name": job_obj.name} for (job_obj, _) in status_map[status][0:num_shown]]
+                job_summary = [{'id': job_obj.job_id, 'name': job_obj.name, 'attempt_no': job_obj.meta['attempt_no']}
+                               for (job_obj, _) in status_map[status][0:num_shown]]
                 log.info("%s%-10s (%-3d): ...", offset, status.lower(), len(status_map[status]))
                 for i, summary in enumerate(job_summary):
-                    log.info("%s%s%-2d. %s %s", offset, indent, i + 1, summary["id"], summary["name"])
+                    log.info("%s%s%3d. name=%s", offset, indent, i + 1, summary["name"])
+                    log.info("%s%s     job_id=%s attempt=%d", offset, indent, summary["id"], summary['attempt_no'])
                 not_shown = len(status_map[status]) - len(job_summary)
                 if not_shown > 0:
                     log.info("%s%s... (%d not shown)", offset, indent, not_shown)
@@ -608,9 +612,10 @@ class BuildGraph(object):
             if failed_build_nodes:
                 log.info("failed jobs (%3d):", len(failed_build_nodes))
                 for failed_node in failed_build_nodes:
-                    log.info("    job_id=%s name=%s reasons=%s",
-                             failed_node._attempt_ids[-1], failed_node.job_id,
-                             failed_node._sched_node.failures)
+                    last_batch_id, last_attempt_no = [failed_node._attempt_ids[-1][k] for k in ("job_id", "attempt_no")]
+                    log.info("  - name=%s", failed_node.job_id)
+                    log.info("    job_id=%s attempt=%d", last_batch_id, last_attempt_no)
+                    log.info("    reason=%s", failed_node._sched_node.failures[-1])
 
             # FIXME -- log job_ids (if failed), their uids, and their final output folder (if applicable)
 
