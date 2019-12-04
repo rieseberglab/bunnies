@@ -6,7 +6,6 @@
 import boto3
 from .constants import PLATFORM
 from .version import __version__
-from python_dynamodb_lock.python_dynamodb_lock import DynamoDBLockClient
 from botocore.exceptions import ClientError
 
 from contextlib import contextmanager
@@ -20,6 +19,10 @@ TABLE_NAME = PLATFORM + "_" + TABLE_VERSION
 
 
 def lock_client():
+    # this is called only during build.
+    # not used at runtime.
+    from python_dynamodb_lock.python_dynamodb_lock import DynamoDBLockClient
+
     if not lock_client.client:
         # get a reference to the DynamoDB resource
         dynamodb_resource = boto3.resource('dynamodb')

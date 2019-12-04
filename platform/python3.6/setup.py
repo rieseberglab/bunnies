@@ -142,7 +142,8 @@ setup(
     # projects.
     extras_require={  # Optional
         'dev': ['pylint', 'flake8'],
-        'lambda': ['requests', 'boto3==1.9.35'],
+        'lambda': ['requests',
+                   'boto3==1.9.35'],
         'build': ['requests',
                   'boto3==1.9.227',
                   'awscli==1.16.237',
