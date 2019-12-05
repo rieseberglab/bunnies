@@ -348,7 +348,7 @@ class BuildGraph(object):
         self.scheduler = Scheduler()
 
     def _log_progress(self, task):
-        self.counters[task] = self.counters.getdefault(task, 0) + 1
+        self.counters[task] = self.counters.setdefault(task, 0) + 1
         if self.counters[task] % 100 == 0:
             log.info("  %s progress: %d...", self.counters[task])
 
