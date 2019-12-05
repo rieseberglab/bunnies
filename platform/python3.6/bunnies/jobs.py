@@ -18,7 +18,7 @@ import io
 
 from datetime import datetime, timedelta
 
-from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
 logger = logging.getLogger(__name__)
 
 
@@ -939,7 +939,13 @@ def describe_jobs(jobs):
                 attempt += 1
                 res = client.describe_jobs(jobs=jobids)
             except EndpointConnectionError:
-                logger.info("Encountered a connection error (attempt=%d). describe_jobs() failed. Retrying in %d seconds...",
+                logger.info("Encountered a connection error (attempt=%d). "
+                            "describe_jobs() failed. Retrying in %d seconds...",
+                            attempt, sleep_time)
+                time.sleep(sleep_time)
+            except ReadTimeoutError:
+                logger.info("Encountered a read timeout error (attempt=%d). "
+                            "describe_jobs() failed. Retrying in %d seconds...",
                             attempt, sleep_time)
                 time.sleep(sleep_time)
         all_jobs += res['jobs']
