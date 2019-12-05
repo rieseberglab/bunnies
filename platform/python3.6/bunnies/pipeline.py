@@ -350,7 +350,7 @@ class BuildGraph(object):
     def _log_progress(self, task):
         self.counters[task] = self.counters.setdefault(task, 0) + 1
         if self.counters[task] % 100 == 0:
-            log.info("  %s progress: %d...", self.counters[task])
+            log.info("  %s progress: %d...", task, self.counters[task])
 
     def _dealias(self, obj, path=None):
         """
