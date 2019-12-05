@@ -343,8 +343,14 @@ class BuildGraph(object):
 
         # roots to build
         self.targets = []
+        self.counters = {}
 
         self.scheduler = Scheduler()
+
+    def _log_progress(self, task):
+        self.counters[task] = self.counters.getdefault(task, 0) + 1
+        if self.counters[task] % 100 == 0:
+            log.info("  %s progress: %d...", self.counters[task])
 
     def _dealias(self, obj, path=None):
         """
@@ -395,13 +401,14 @@ class BuildGraph(object):
             dealiased.deps = dealiased_deps
 
             self.by_uid[dealiased.uid] = dealiased
-
+            self._log_progress("building graph")
         return dealiased
 
     def add_targets(self, targets):
         if not isinstance(targets, (list, tuple)):
             targets = list([targets])
 
+        log.info("adding %d targets to build graph...", len(targets))
         all_targets = self.targets + self._dealias(targets)
         self.targets[:] = [x for x in set(all_targets)]
 
