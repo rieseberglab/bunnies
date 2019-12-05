@@ -440,7 +440,7 @@ class FSxDisk(InstanceMount):
 
 class ComputeEnv(object):
 
-    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=1280, **kwargs):
+    def __init__(self, name, global_scratch_gb=0, local_scratch_gb=1280, max_vcpus=4096, **kwargs):
 
         # NAME_RE = re.compile("^[-a-zA-Z0-9_]{1,128}$")
         valid_name = "".join([x if (x.isalnum() or x in "_-") else "_" for x in name])
@@ -450,8 +450,9 @@ class ComputeEnv(object):
         self.disks = {}
         self.launch_template = None
         self.batch_ce = None
-        self.submissions = {} # job_name: submitted_job_obj
-        self.job_definitions = {} # keyed by (name, image)
+        self.max_vcpus = max_vcpus or 4096
+        self.submissions = {}      # job_name: submitted_job_obj
+        self.job_definitions = {}  # keyed by (name, image)
 
         if global_scratch_gb > 0:
             self.disks['scratch'] = {
@@ -751,7 +752,7 @@ cloud-init-per once docker_options echo 'OPTIONS="${OPTIONS} --default-ulimit no
         comp_resources = {
             "type": ce_type,
             "minvCpus": 0,
-            "maxvCpus": 1024,
+            "maxvCpus": self.max_vcpus,
             # desiredvCpus changes dynamically -- we don't match on it.
             #"desiredvCpus": 0,
             "instanceTypes": [

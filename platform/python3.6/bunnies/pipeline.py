@@ -457,7 +457,8 @@ class BuildGraph(object):
 
         env_args = {
             "global_scratch_gb": build_args.pop("global_scratch_gb", 0),
-            "local_scratch_gb": build_args.pop("local_scratch_gb", 1280)
+            "local_scratch_gb": build_args.pop("local_scratch_gb", 1280),
+            "max_vcpus": build_args.pop("max_vcpus", 4096)
         }
 
         schedule_opts = {
