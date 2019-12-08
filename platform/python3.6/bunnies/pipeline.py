@@ -141,16 +141,22 @@ class BuildNode(object):
         if not build_id:
             build_id = str(uuid.uuid4())
 
-        max_attempts = kwargs.pop("max_attempts", 1)
+        max_attempt = kwargs.pop("max_attempt", 1)
+        min_attempt = kwargs.pop("min_attempt", 1)
 
         log.debug("build %s scheduling job %s...", build_id, job_id)
         assert self._attempt is None
 
         def _submit_new_job(ctx, attempt_no=1):
             # fixme calculate attempts:
-            if attempt_no > max_attempts:
+            if attempt_no < min_attempt:
+                log.debug("  jump starting job %s at attempt %d",
+                          job_id, min_attempt)
+                attempt_no = min_attempt
+
+            if attempt_no > max_attempt:
                 # allow the next try to start from attempt_no==1
-                log.debug("  maximum number of attempts (%d) exceeded. cancelling job.", max_attempts)
+                log.debug("  maximum number of attempts (%d) exceeded. cancelling job.", max_attempt)
                 ctx.jobdata = ""
                 ctx.jobattempt = 0
                 ctx.save()
@@ -191,9 +197,9 @@ class BuildNode(object):
                     "BUNNIES_TRANSFER_SCRIPT": remote_script_url,
                     "BUNNIES_USER_DEPS": user_deps_url,
                     "BUNNIES_JOBID": job_id,
-                    "BUNNIES_ATTEMPT": "%d %d" % (attempt_no, max_attempts),
+                    "BUNNIES_ATTEMPT": "%d %d" % (attempt_no, max_attempt),
                     "BUNNIES_RESULT": os.path.join(self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE),
-                    "BUNNIES_SUBMITTER": build_id
+                    "BUNNIES_BUILDID": build_id
                 }
             }
 
@@ -469,14 +475,15 @@ class BuildGraph(object):
         }
 
         schedule_opts = {
-            "max_attempts": build_args.pop("max_attempts", 3),
+            "max_attempt": build_args.pop("max_attempt", 3),
+            "min_attempt": build_args.pop("min_attempt", 1),
             "build_id": run_name + "." + str(uuid.uuid4())
         }
 
         if build_args:
             raise ValueError("unrecognized parameters: %s" % (build_args,))
 
-        if schedule_opts["max_attempts"] <= 0:
+        if schedule_opts["max_attempt"] <= 0:
             raise ValueError("max attempts must be >= 0")
 
         compute_env = ComputeEnv(run_name, **env_args)
