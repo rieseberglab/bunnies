@@ -94,6 +94,14 @@ class BuildNode(object):
         yield self
 
     @property
+    def output_url(self):
+        if self._output_ready is None:
+            if not isinstance(self.data, Target):
+                return None
+            return "%s%s" % (self.data.output_prefix(), constants.TRANSFORM_RESULT_FILE)
+        return self._output_ready
+
+    @property
     def output_ready(self):
         """determines if the buildnode's output is readily available for consumption by downstream analyses"""
         if self._output_ready is None:
@@ -128,8 +136,11 @@ class BuildNode(object):
             return
         log.warn("no job definition registered for build node: %s", self.data)
 
+    @property
     def known_attempt_ids(self):
         """returns (attempt_no, batch_job_id) pairs"""
+        # FIXME modularity issue. This will need to return a different type
+        #       of ID when other types of jobs than batch jobs will be supported.
         seen = {}
         pairs = []
         for att in self._attempt_ids:
@@ -556,14 +567,16 @@ class BuildGraph(object):
             log.info("submitted:")
             for status in sorted(status_map.keys()):
                 log.info("%scompute environment summary:", offset)
-                job_summary = [{'id': job_obj.job_id, 'name': job_obj.name, 'attempt_info': _build_node_of_job_obj(job_obj).known_attempt_ids,
-                                'output_ready': _build_node_of_job_obj.output_ready}
+                job_summary = [{'id': job_obj.job_id,
+                                'name': job_obj.name,
+                                'attempt_info': _build_node_of_job_obj(job_obj).known_attempt_ids,
+                                'ready_url': _build_node_of_job_obj(job_obj).output_url}
                                for (job_obj, _) in status_map[status][0:num_shown]]
 
                 log.info("%s%-10s (%-3d): ...", offset, status.lower(), len(status_map[status]))
                 for i, summary in enumerate(job_summary):
                     log.info("%s%s%3d. name=%s", offset, indent, i + 1, summary["name"])
-                    log.info("%s%s     ready_url=%s", offset, indent, summary['output_ready'])
+                    log.info("%s%s     ready_url=%s", offset, indent, summary['ready_url'])
                     for attempt_no, job_id in summary['attempt_info']:
                         log.info("%s%s     job_id=%s attempt=%d", offset, indent, job_id, attempt_no)
 
