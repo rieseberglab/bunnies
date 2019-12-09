@@ -128,6 +128,17 @@ class BuildNode(object):
             return
         log.warn("no job definition registered for build node: %s", self.data)
 
+    def known_attempt_ids(self):
+        """returns (attempt_no, batch_job_id) pairs"""
+        seen = {}
+        pairs = []
+        for att in self._attempt_ids:
+            if att['attempt_no'] in seen:
+                continue
+            pairs.append((att['attempt_no'], att['job_id']))
+        pairs.sort()
+        return pairs
+
     def schedule(self, compute_env, scheduler_node, build_id="", **kwargs):
         """schedule this build node to execute on the compute_env compute
            environment. The scheduler node provides historical information"""
@@ -537,17 +548,25 @@ class BuildGraph(object):
                 result[state_name] = node_ids
             return result
 
+        def _build_node_of_job_obj(job_obj):
+            return self.scheduler.get_node(job_obj.name).data
+
         def _print_execution_status(status_map, offset="", indent=""):
             num_shown = 5
             log.info("submitted:")
             for status in sorted(status_map.keys()):
                 log.info("%scompute environment summary:", offset)
-                job_summary = [{'id': job_obj.job_id, 'name': job_obj.name, 'attempt_no': job_obj.meta['attempt_no']}
+                job_summary = [{'id': job_obj.job_id, 'name': job_obj.name, 'attempt_info': _build_node_of_job_obj(job_obj).known_attempt_ids,
+                                'output_ready': _build_node_of_job_obj.output_ready}
                                for (job_obj, _) in status_map[status][0:num_shown]]
+
                 log.info("%s%-10s (%-3d): ...", offset, status.lower(), len(status_map[status]))
                 for i, summary in enumerate(job_summary):
                     log.info("%s%s%3d. name=%s", offset, indent, i + 1, summary["name"])
-                    log.info("%s%s     job_id=%s attempt=%d", offset, indent, summary["id"], summary['attempt_no'])
+                    log.info("%s%s     ready_url=%s", offset, indent, summary['output_ready'])
+                    for attempt_no, job_id in summary['attempt_info']:
+                        log.info("%s%s     job_id=%s attempt=%d", offset, indent, job_id, attempt_no)
+
                 not_shown = len(status_map[status]) - len(job_summary)
                 if not_shown > 0:
                     log.info("%s%s... (%d not shown)", offset, indent, not_shown)
