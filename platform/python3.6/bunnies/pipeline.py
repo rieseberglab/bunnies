@@ -573,18 +573,21 @@ class BuildGraph(object):
             log.info("submitted:")
             for status in sorted(status_map.keys()):
                 log.info("%scompute environment summary:", offset)
+
                 job_summary = [{'id': job_obj.job_id,
                                 'name': job_obj.name,
                                 'attempt_info': _build_node_of_job_obj(job_obj).known_attempt_ids,
-                                'ready_url': _build_node_of_job_obj(job_obj).output_url}
+                                'url': os.path.dirname(_build_node_of_job_obj(job_obj).output_url)}
                                for (job_obj, _) in status_map[status][0:num_shown]]
 
                 log.info("%s%-10s (%-3d): ...", offset, status.lower(), len(status_map[status]))
                 for i, summary in enumerate(job_summary):
+                    # Print job name, batch job ids, attempt numbers
+                    # and final output.
                     log.info("%s%s%3d. name=%s", offset, indent, i + 1, summary["name"])
-                    log.info("%s%s     ready_url=%s", offset, indent, summary['ready_url'])
                     for attempt_no, job_id in summary['attempt_info']:
                         log.info("%s%s     job_id=%s attempt=%d", offset, indent, job_id, attempt_no)
+                    log.info("%s%s     output=%s", offset, indent, summary['ready_url'])
 
                 not_shown = len(status_map[status]) - len(job_summary)
                 if not_shown > 0:
