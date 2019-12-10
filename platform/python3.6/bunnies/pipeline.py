@@ -506,7 +506,13 @@ class BuildGraph(object):
             raise ValueError("unrecognized parameters: %s" % (build_args,))
 
         if schedule_opts["max_attempt"] <= 0:
-            raise ValueError("max attempts must be >= 0")
+            raise ValueError("max attempt number must be >= 0")
+
+        if schedule_opts["min_attempt"] <= 0:
+            raise ValueError("min attempt number must be >= 0")
+
+        if schedule_opts["min_attempt"] > schedule_opts["max_attempt"]:
+            raise ValueError("min and max attempt numbers provided are incompatible")
 
         compute_env = ComputeEnv(run_name, **env_args)
 
