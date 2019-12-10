@@ -587,7 +587,7 @@ class BuildGraph(object):
                     log.info("%s%s%3d. name=%s", offset, indent, i + 1, summary["name"])
                     for attempt_no, job_id in summary['attempt_info']:
                         log.info("%s%s     job_id=%s attempt=%d", offset, indent, job_id, attempt_no)
-                    log.info("%s%s     output=%s", offset, indent, summary['ready_url'])
+                    log.info("%s%s     output=%s", offset, indent, summary['url'])
 
                 not_shown = len(status_map[status]) - len(job_summary)
                 if not_shown > 0:
