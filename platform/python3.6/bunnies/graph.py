@@ -28,10 +28,24 @@ class Cacheable(object):
         retrieve an id string that can be used as a key to unambiguously identify this
         resource in a cache
 
-        implementations might want to cache the result of the computation
+        concrete implementations might want to cache the result of the computation
         """
         canon_doc = self.canonical()
         return utils.canonical_hash(canon_doc)
+
+    def __hash__(self):
+        return hash(self.canonical_id)
+
+    def __eq__(self, other):
+        """
+        cacheable object can be compared based on their canonical id.
+        this is inefficient. concrete subclasses should reimplement.
+        """
+        if other is None:
+            return False
+        if not isinstance(other, Cacheable):
+            raise NotImplementedError("cannot compare")
+        return self.canonical_id == other.canonical_id
 
 
 class Target(object):
@@ -111,6 +125,7 @@ class ExternalFile(Cacheable, Target):
             'url': self.url,
             'digests': self.digests
         }
+
 
 unmarshall.register_kind(ExternalFile)
 
