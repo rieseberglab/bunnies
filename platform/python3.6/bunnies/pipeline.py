@@ -405,7 +405,7 @@ class BuildGraph(object):
 
         # dealias object based on its uid
 
-        if obj in path:
+        if [o for o in path if o is obj]:
             # produce ordered proof of cycle
             raise PipelineException("Cycle in dependency graph detected: %s", _path_string(path))
 
