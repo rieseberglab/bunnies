@@ -57,9 +57,9 @@ def _unmarshall(obj, path):
         return ".".join(path)
 
     if isinstance(obj, list):
-        return [self._unmarshall(o, path=path + ("[%d]" % (i,),)) for i, o in enumerate(obj)]
+        return [_unmarshall(o, path=path + ("[%d]" % (i,),)) for i, o in enumerate(obj)]
     if isinstance(obj, tuple):
-        return tuple([self._dealias(o, path=path) for o in obj])
+        return tuple([_unmarshall(o, path=path + ("[%d]" % (i,),)) for i, o in enumerate(obj)])
     if isinstance(obj, dict):
         if C.MANIFEST_KIND_ATTR not in obj:
             # regular dict
