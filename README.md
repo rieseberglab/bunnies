@@ -19,7 +19,7 @@ reproducibility. The main objective of a "reproducible" pipeline is
 to allow multiple users of this pipeline to produce the same result
 (be it a file, a report, or a verdict).
 
-We have found in many cases that this is insufficient. Bunnies aims to
+_We have found in many cases that this is insufficient_. Bunnies aims to
 provide a solution to many typical shortcomings of reproducible frameworks:
 
   - **Detecting changes** Pipelines that involve many core-years of computation, can rarely
