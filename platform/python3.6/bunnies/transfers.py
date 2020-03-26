@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 
 from . import utils
 from . import constants
+from .exc import ImportError
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +137,183 @@ def yield_in_chunks(fp, chunk_size_bytes):
         if not chunk:
             break
         yield chunk
+
+
+def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
+    """copies the source blob to the destination. If the object is small this is
+       a simple operation. If the object is > 5GB this performs a multipart upload
+       copy.
+
+       res = {
+    'CopyObjectResult': {
+        'ETag': 'string',
+        'LastModified': datetime(2015, 1, 1)
+    },
+    'Expiration': 'string',
+    'CopySourceVersionId': 'string',
+    'VersionId': 'string',
+    'ServerSideEncryption': 'AES256'|'aws:kms',
+    'SSECustomerAlgorithm': 'string',
+    'SSECustomerKeyMD5': 'string',
+    'SSEKMSKeyId': 'string',
+    'SSEKMSEncryptionContext': 'string',
+    'RequestCharged': 'requester'
+    }
+
+    """
+    if not client:
+        s3 = boto3.client('s3')
+    else:
+        s3 = client
+
+    # we need to know the size of the source url to determine the copy method
+    src_bucket, src_key = utils.s3_split_url(src_url)
+    dst_bucket, dst_key = utils.s3_split_url(dst_url)
+
+    request_payer = kwargs.get("RequestPayer", None)
+    meta_kwargs = {}
+    if request_payer:
+        meta_kwargs["RequestPayer"] = request_payer
+
+    src_meta = utils.get_blob_meta(src_url, **meta_kwargs)
+    src_etag = src_meta['ETag']
+    src_size = src_meta['ContentLength']
+
+    if kwargs.get('MetadataDirective', 'X') != 'COPY':
+        new_meta = src_meta['Metadata']
+        new_meta['SrcLastModified'] = str(src_meta['LastModified'].timestamp())
+    else:
+        new_meta = kwargs.pop('Metadata', {})
+
+    if src_size <= 5368709120:
+        copy_args = {}
+        copy_args.update(kwargs)
+        copy_args.update({
+            'Bucket': dst_bucket,
+            'Key': dst_key,
+            'CopySource': {'Bucket': src_bucket, 'Key': src_key},
+            'Metadata': new_meta
+        })
+        if 'ContentType' in src_meta:
+            copy_args['ContentType'] = src_meta['ContentType']
+        else:
+            copy_args['ContentType'] = 'application/octet-stream'
+        if 'ContentEncoding' in src_meta:
+            copy_args['ContentEncoding'] = src_meta['ContentEncoding']
+
+        return s3.copy_object(**copy_args)
+
+    #
+    # multipart upload_part_copy. ugh
+    #
+    mpart = None
+    try:
+        create_args = {}
+        create_args.update(kwargs)
+        part_args = {}
+
+        valid_create_kw = ["ACL", "Bucket", "CacheControl", "ContentDisposition", "ContentEncoding", "ContentLanguage",
+                           "ContentType", "Expires", "GrantFullControl", "GrantRead", "GrantReadACP", "GrantWriteACP",
+                           "Key", "Metadata", "ServerSideEncryption", "StorageClass", "WebsiteRedirectLocation",
+                           "SSECustomerAlgorithm", "SSECustomerKey", "SSECustomerKeyMD5", "SSEKMSKeyId", "SSEKMSEncryptionContext",
+                           "RequestPayer", "Tagging", "ObjectLockMode", "ObjectLockRetainUntilDate", "ObjectLockLegalHoldStatus"]
+        for k in kwargs:
+            if k.startswith("CopySource"):
+                part_args[k] = kwargs[k]
+                del create_args[k]
+            elif k in ('RequestPayer'):
+                part_args[k] = kwargs[k]
+            elif k not in valid_create_kw:
+                log.warn("%s ignoring copy request keyword %s key:%s bucket:%s", logprefix,
+                         k, dst_bucket, dst_key)
+                del create_args[k]
+
+        create_args.update({
+            'Bucket': dst_bucket,
+            'Key': dst_key,
+            'Metadata': new_meta
+        })
+        if 'ContentType' in src_meta:
+            create_args['ContentType'] = src_meta['ContentType']
+        else:
+            create_args['ContentType'] = 'application/octet-stream'
+        if 'ContentEncoding' in src_meta:
+            create_args['ContentEncoding'] = src_meta['ContentEncoding']
+
+        mpart = s3.create_multipart_upload(**create_args)
+
+        def _gen_parts(size):
+            part_size = 5*1024*1024*1024 # 5GB
+            num_parts = (size + (part_size - 1)) // part_size
+            for i in range(0, num_parts):
+                start = i * part_size
+                end = start + part_size - 1
+                if end >= size:
+                    end = size - 1
+
+                yield (i+1, num_parts, start, end, size, {
+                    'PartNumber': i+1, # must be a natural integer
+                    'CopySourceRange': "bytes=%d-%d" % (start, end)
+                })
+
+        parts = []
+        part_args.update({
+            "Key": dst_key,
+            "Bucket": dst_bucket,
+            "UploadId": mpart['UploadId'],
+            "CopySource": {"Bucket": src_bucket, "Key": src_key},
+        })
+        if "CopySourceIfMatch" not in part_args and 'CopySourceIfNoneMatch' not in part_args:
+            part_args["CopySourceIfMatch"] = src_etag
+
+        # upload_part_copy foreach chunk
+        for partnum, totalparts, partstart, partend, totalsize, chunk_params in _gen_parts(src_size):
+            part_args.update(chunk_params)
+            log.info("%s starting multipart_upload_copy part:%03d/%03d range:%s total_B:%d",
+                     logprefix, partnum, totalparts, part_args['CopySourceRange'], totalsize)
+            part_res = s3.upload_part_copy(**part_args)
+            parts.append((part_args["PartNumber"], part_res['CopyPartResult']['ETag']))
+
+        # finish it
+        parts_document = {
+            'Parts': [{'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts]
+        }
+
+        log.debug("%s completing multipart copy to bucket:%s key:%s", logprefix,
+                  dst_bucket, dst_key)
+        completed = s3.complete_multipart_upload(Bucket=dst_bucket, Key=dst_key,
+                                                 UploadId=mpart['UploadId'],
+                                                 MultipartUpload=parts_document)
+        mpart = None
+        log.debug("%s completed multipart copy to bucket:%s key:%s etag:%s size:%s", logprefix,
+                  dst_bucket, dst_key, completed['ETag'], src_size)
+        dst_meta = utils.get_blob_meta(dst_url, **meta_kwargs)
+
+        # make the copy result uniform with the simple copy
+        completed.update({
+            'CopyObjectResult': {
+                'ETag': dst_meta['ETag'],
+                'LastModified': dst_meta['LastModified']
+            },
+        })
+        assert src_size == dst_meta['ContentLength']
+
+        log.debug("%s multipart copy bucket:%s key:%s result:%s",
+                  logprefix, dst_bucket, dst_key, completed)
+        return completed
+
+    except ClientError as clierr:
+        log.error("%s client error: %s", logprefix, str(clierr))
+        raise ImportError("error in upload copy to bucket:%s key:%s: %s" %
+                          (dst_bucket, dst_key, clierr.response['Error']['Code']))
+    finally:
+        if mpart:
+            try:
+                s3.abort_multipart_upload(Bucket=dst_bucket, Key=dst_key, UploadId=mpart['UploadId'])
+                log.debug("%s multipart upload aborted bucket:%s key:%s uploadid:%s", logprefix,
+                          dst_bucket, dst_key, mpart['UploadId'])
+            except Exception as exc:
+                log.error("%s could not abort multipart upload:", logprefix, exc_info=exc)
 
 
 def s3_streaming_put_simple(inputfp, outputurl, content_type=None, content_length=None, content_md5=None, content_encoding=None,

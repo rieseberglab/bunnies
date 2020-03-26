@@ -5,6 +5,7 @@ from . import setup_logging
 import bunnies.jobs
 import bunnies.environment
 import bunnies.kvstore
+import bunnies.migrate
 
 log = logging.getLogger(__package__)
 
@@ -19,7 +20,7 @@ def main():
     bunnies.jobs.configure_parser(subparsers)
     bunnies.environment.configure_parser(subparsers)
     bunnies.kvstore.configure_parser(subparsers)
-
+    bunnies.migrate.configure_parser(subparsers)
     args = parser.parse_args(sys.argv[1:])
 
     if args.command is None:

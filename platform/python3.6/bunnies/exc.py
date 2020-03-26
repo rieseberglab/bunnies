@@ -22,3 +22,6 @@ class UnmarshallException(BunniesException):
 
 class NotImpl(BunniesException):
     pass
+
+class ImportError(BunniesException):
+    pass

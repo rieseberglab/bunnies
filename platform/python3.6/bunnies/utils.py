@@ -74,7 +74,7 @@ def s3_split_url(objecturl):
     return bucketname, keyname
 
 
-def get_blob_meta(objecturl, logprefix=""):
+def get_blob_meta(objecturl, logprefix="", **kwargs):
     """fetches metadata about the given object. if the object doesn't exist. raise NoSuchFile if file doesn't exist
 
       Ex response:
@@ -102,7 +102,7 @@ def get_blob_meta(objecturl, logprefix=""):
     logger.debug("%sfetching meta for URL: %s", logprefix, objecturl)
     s3 = boto3.client('s3')
     try:
-        head_res = s3.head_object(Bucket=bucketname, Key=keyname)
+        head_res = s3.head_object(Bucket=bucketname, Key=keyname, **kwargs)
     except ClientError as clierr:
         if clierr.response['Error']['Code'] == '404':
             raise NoSuchFile(objecturl)
@@ -126,9 +126,11 @@ class StreamingBodyCtx(object):
         self.body.close()
 
 
-def get_blob_ctx(objecturl, logprefix=""):
+def get_blob_ctx(objecturl, logprefix="", **kwargs):
     """returns (body, info) for a given blob url.
        It takes care of closing the connection automatically.
+
+        kwargs is passed to GetObject call
 
     >>> with get_blob_ctx("s3://foo/bar") as (body, info):
     ...    data = body.read()
@@ -139,7 +141,7 @@ def get_blob_ctx(objecturl, logprefix=""):
     logger.info("%sfetching URL: %s", logprefix, objecturl)
     s3 = boto3.client('s3')
     try:
-        res = s3.get_object(Bucket=bucketname, Key=keyname)
+        res = s3.get_object(Bucket=bucketname, Key=keyname, **kwargs)
     except ClientError as clierr:
         error_code = clierr.response['Error']['Code']
         if error_code in ('404', 'NoSuchKey'):

@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 import uuid
 import bunnies
 
+from .exc import ImportError
 from . import lambdas
 from . import utils
 from . import transfers
@@ -60,9 +61,6 @@ def guess_length(fp):
             fp.seek(pos, 0)
         except Exception:
             log.error("could not reset file position in %s.", fp)
-
-class ImportError(BunniesException):
-    pass
 
 class DataImport(object):
 
