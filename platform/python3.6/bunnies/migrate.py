@@ -125,7 +125,7 @@ def _rewrite_results_file(src_url, dst_url, translations, client=None):
         if isinstance(obj, str):
             if obj in translations:
                 _walk_obj.count += 1
-                logger.info("translating %s to %s", obj, translations.get(obj))
+                #logger.info("translating %s to %s", obj, translations.get(obj))
                 return translations.get(obj)
             else:
                 return obj
@@ -138,20 +138,29 @@ def _rewrite_results_file(src_url, dst_url, translations, client=None):
 
     with utils.get_blob_ctx(src_url, RequestPayer='requester') as (body, info):
         json_obj = json.loads(body.read())
-        print(info, "before", json_obj)
+        json_meta = info['Metadata']
+        json_ct = info.get('ContentType', "application/json")
         json_obj = _walk_obj(json_obj)
 
-    logger.debug("translations: %d after obj: %s", _walk_obj.count, json_obj)
+    logger.debug("performed %d URL translations: %s", _walk_obj.count)
 
     json_str = json.dumps(json_obj, sort_keys=True, indent=4, separators=(',', ': '))
     fp = io.BytesIO(json_str.encode('utf-8'))
-    #transfers.s3_streaming_put(fp, dst_url, content_type="application/json",
-    #                           meta=None, logprefix=logprefix)
+    return transfers.s3_streaming_put(fp, dst_url, content_type=json_ct,
+                                      meta=json_meta)
 
-def _cmd_migrate_bucket(srcprefix, dstprefix, journal_path="migrate.journal.txt", dry_run=False, keep_source=False, **kwargs):
+def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="", journal_path="migrate.journal.txt", dry_run=False, keep_source=False, **kwargs):
     s3 = boto3.client('s3')
-    src_bucket, src_keyprefix = utils.s3_split_url(srcprefix)
+    src_bucket, src_keypart = utils.s3_split_url(srcpath)
+    if not src_keypart.startswith(src_keyprefix):
+        raise ValueError("key portion of SRCPATH (%s) should start with KEYPREFIX (%s)" % (repr(src_keypart), repr(src_keyprefix)))
+
     dst_bucket, dst_keyprefix = utils.s3_split_url(dstprefix)
+
+    logger.info("moving files under s3://%s/%s", src_bucket, src_keypart)
+    if src_keyprefix:
+        logger.info("stripping source prefix: %s", src_keyprefix)
+    logger.info("moving files to: s3://%s/%s", dst_bucket, dst_keyprefix)
 
     def _is_nested(fpath, indirs):
         if not fpath:
@@ -167,9 +176,13 @@ def _cmd_migrate_bucket(srcprefix, dstprefix, journal_path="migrate.journal.txt"
         return _is_nested(parent, indirs)
 
     def _dst_key(srckey):
+        """srckey does not have the bucket information"""
         if srckey.startswith(src_keyprefix):
             srckey = srckey[len(src_keyprefix):]
-        return os.path.join(dst_keyprefix, srckey)
+        out = os.path.join(dst_keyprefix, srckey)
+        # logger.debug("skey:%s src_keyprefix:%s dst_keyprefix:%s dkey:%s",
+        #              srckey, src_keyprefix, dst_keyprefix, out)
+        return out
 
     def _is_results_file(keyname):
         dirname, basename = os.path.split(keyname)
@@ -179,7 +192,7 @@ def _cmd_migrate_bucket(srcprefix, dstprefix, journal_path="migrate.journal.txt"
 
     with Journal.open(journal_path, read_only=dry_run) as journal:
 
-        src_keys = [sk for sk in _bucket_keys(src_bucket, src_keyprefix, client=s3)]
+        src_keys = [sk for sk in _bucket_keys(src_bucket, src_keypart, client=s3)]
         # S3 doens't preserve lastmodified across copies, so we instead
         # copy them in order from oldest to newest -- this guarantees at least
         # that index files will remain newer than their associated data files.
@@ -191,30 +204,35 @@ def _cmd_migrate_bucket(srcprefix, dstprefix, journal_path="migrate.journal.txt"
                 dirname, basename = os.path.split(sk['Key'])
                 transform_dirs[dirname] = basename
 
-        logger.info("found %d result source folders (prefix=%s)...", len(transform_dirs), srcprefix)
+        logger.info("found %d result source folders (prefix=%s)...", len(transform_dirs), srcpath)
 
         # list keys on target bucket
         dst_keys = {dk['Key']: dk['LastModified'] for dk in _bucket_keys(dst_bucket, dst_keyprefix, client=s3)}
-
         src_blobs = OrderedDict() # blobs to move to destination
 
-        # populate mapping of objects that need to still be moved
-        for sk in src_keys:
-            if _is_nested(sk['Key'], transform_dirs):
-                dk = _dst_key(sk['Key'])
-                if dk not in dst_keys:
-                    src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
-
-        logger.info("migrating %d blobs...", len(src_blobs))
-        epoch = datetime.datetime(1970, 1, 1, 0, 0)
 
         final_locations = {}
         # files we have moved on previous runs
         for old_location, new_location in journal.items():
             final_locations[old_location] = new_location
+
         # files we'll move this run
         for src_blob, dst_info in src_blobs.items():
-            final_locations[src_blob] = dst_info['dst_url']
+            logger.debug("LOCATION2: %s => %s", fullkey, final_locations[fullkey])
+
+        # populate mapping of objects that need to still be moved
+        for sk in src_keys:
+            if _is_nested(sk['Key'], transform_dirs):
+                dk = _dst_key(sk['Key'])
+                fullkey = "s3://%s/%s" % (src_bucket, sk['Key'])
+                final_locations[fullkey] = "s3://%s/%s" % (dst_bucket, dk)
+
+                # skip the copy if it exists
+                if dk not in dst_keys:
+                    src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
+
+        logger.info("migrating %d blobs...", len(src_blobs))
+        epoch = datetime.datetime(1970, 1, 1, 0, 0)
 
         # check if some targets overwrite some sources
         if src_bucket == dst_bucket:
@@ -259,14 +277,17 @@ def _cmd_migrate_bucket(srcprefix, dstprefix, journal_path="migrate.journal.txt"
                                  Key=src_blob,
                                  RequestPayer='requester')
 
-        logger.info("migrating result files")
         migrate_files = [(x, y) for (x, y) in src_blobs.items() if _is_results_file(x)]
-        logger.info("migrating %d result files", len(migrate_files))
-        for i, (src_blob, dst_blob) in enumerate(migrate_files):
+        logger.info("migrating %d result manifests", len(migrate_files))
+        for i, (src_blob, dst_info) in enumerate(migrate_files):
+            dst_blob = dst_info['dst_url']
+            src_date = dst_info['src_info']['LastModified']
+
             logger.info("[%4d/%4d] s3://%s/%s  => s3://%s/%s",
                         i+1, len(migrate_files), src_bucket, src_blob, dst_bucket, dst_blob)
-            _rewrite_results_file("s3://%s/%s" % (src_bucket, src_blob), "s3://%s/%s" % (dst_bucket, dst_blob),
-                                  final_locations, client=s3)
+            if not dry_run:
+                _rewrite_results_file("s3://%s/%s" % (src_bucket, src_blob), "s3://%s/%s" % (dst_bucket, dst_blob),
+                                      final_locations, client=s3)
             #journal["s3://%s/%s" % (src_bucket, src_blob)] = "s3://%s/%s" % (dst_bucket, dst_blob)
             if not dry_run and not keep_source:
                 logger.info("[%4d/%4d] Deleting source s3://%s/%s",
@@ -283,8 +304,9 @@ def configure_parser(main_subparsers):
                                  "The calling user is assumed to own the destination bucket and will pay "
                                  "to pull resources from the source bucket (i.e. (RequestPayer=request).""")
     subp.set_defaults(func=_cmd_migrate_bucket)
-    subp.add_argument("srcprefix", metavar="SRCPREFIX", type=str, help="migrate keys matching this urlprefix (e.g. s3://my-bucket.example.org/)")
+    subp.add_argument("srcpath", metavar="SRCPATH", type=str, help="migrate keys matching this urlprefix (e.g. s3://my-bucket.example.org/)")
     subp.add_argument("dstprefix", metavar="DSTPREFIX", type=str, help="migrate to this key prefix. (e.g. s3://dst-bucket.example.org/data/")
+    subp.add_argument("--srcprefix", dest="src_keyprefix", metavar="SRCPREFIX", default="", type=str, help="identify the portion of the SRCPATH that should not be copied to the destination.")
     subp.add_argument("-n", dest="dry_run", action="store_true", default=False, help="dry run. just print what will be done")
     subp.add_argument("--keep", dest="keep_source", action="store_true", default=False, help="keep files in source location")
     subp.add_argument("--journal", dest="journal_path", type=str, default="migrate.journal.txt", help="append migrated records to this file")
