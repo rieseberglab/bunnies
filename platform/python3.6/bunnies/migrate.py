@@ -7,6 +7,7 @@ import os.path
 
 from collections import OrderedDict
 import boto3
+from botocore.exceptions import ClientError
 from . import constants
 from . import utils
 from . import transfers
@@ -14,7 +15,6 @@ import datetime
 import io
 
 logger = logging.getLogger(__name__)
-
 
 class Journal(MutableMapping):
     def __init__(self, fname, read_only=False):
@@ -43,6 +43,8 @@ class Journal(MutableMapping):
         return len(self.db)
 
     def __setitem__(self, key, val):
+        if self.db.get(key, None) == val:
+            return
         self.db[key] = val
         self.__log(key, val)
 
@@ -149,7 +151,10 @@ def _rewrite_results_file(src_url, dst_url, translations, client=None):
     return transfers.s3_streaming_put(fp, dst_url, content_type=json_ct,
                                       meta=json_meta)
 
-def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="", journal_path="migrate.journal.txt", dry_run=False, keep_source=False, **kwargs):
+def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
+                        journal_path="migrate.journal.txt", dry_run=False,
+                        keep_source=False, migrate_all=False, threads=1, **kwargs):
+
     s3 = boto3.client('s3')
     src_bucket, src_keypart = utils.s3_split_url(srcpath)
     if not src_keypart.startswith(src_keyprefix):
@@ -210,26 +215,23 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="", journal_path="migr
         dst_keys = {dk['Key']: dk['LastModified'] for dk in _bucket_keys(dst_bucket, dst_keyprefix, client=s3)}
         src_blobs = OrderedDict() # blobs to move to destination
 
-
         final_locations = {}
         # files we have moved on previous runs
         for old_location, new_location in journal.items():
             final_locations[old_location] = new_location
 
-        # files we'll move this run
-        for src_blob, dst_info in src_blobs.items():
-            logger.debug("LOCATION2: %s => %s", fullkey, final_locations[fullkey])
-
-        # populate mapping of objects that need to still be moved
+        # populate mapping of objects that need to still be moved.
+        # we only consider files inside a bunnies result folder (unless migrate_all is True)
         for sk in src_keys:
-            if _is_nested(sk['Key'], transform_dirs):
+            if migrate_all or _is_nested(sk['Key'], transform_dirs):
                 dk = _dst_key(sk['Key'])
                 fullkey = "s3://%s/%s" % (src_bucket, sk['Key'])
                 final_locations[fullkey] = "s3://%s/%s" % (dst_bucket, dk)
 
+                # XXX
                 # skip the copy if it exists
-                if dk not in dst_keys:
-                    src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
+                #if dk not in dst_keys:
+                src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
 
         logger.info("migrating %d blobs...", len(src_blobs))
         epoch = datetime.datetime(1970, 1, 1, 0, 0)
@@ -252,26 +254,31 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="", journal_path="migr
             src_date = dst_info['src_info']['LastModified']
 
             modified_since = dst_keys.get(dst_blob, epoch)
-            logger.info("[%4d/%4d] s3://%s/%s  => s3://%s/%s",
-                        i+1, len(migrate_files), src_bucket, src_blob, dst_bucket, dst_blob)
+            logger.info("[%d/%d] s3://%s/%s  (%s) => s3://%s/%s",
+                        i+1, len(migrate_files), src_bucket, src_blob, utils.human_size(src_size),
+                        dst_bucket, dst_blob)
 
             if not dry_run:
-                res = transfers.s3_copy_object("s3://%s/%s" % (src_bucket, src_blob),
-                                               "s3://%s/%s" % (dst_bucket, dst_blob),
-                                               logprefix="[%4d/%4d]" % (i+1, len(migrate_files)),
-                                               CopySourceIfModifiedSince=modified_since,
-                                               TaggingDirective='COPY',
-                                               RequestPayer='requester'
-                )
-                if res['ResponseMetadata']['HTTPStatusCode'] != 200:
-                    logger.error("copy object non-200: %s", res)
-                    raise Exception("DEBUG THIS CORNER CASE")
+
+                try:
+                    res = transfers.s3_copy_object("s3://%s/%s" % (src_bucket, src_blob),
+                                                   "s3://%s/%s" % (dst_bucket, dst_blob),
+                                                   logprefix="[%d/%d]" % (i+1, len(migrate_files)),
+                                                   CopySourceIfModifiedSince=modified_since,
+                                                   TaggingDirective='COPY',
+                                                   RequestPayer='requester',
+                                                   threads=threads
+                    )
+                except ClientError as clierr:
+                    if clierr.response['Error']['Code'] == "PreconditionFailed":
+                        logger.info("[%d/%d] Destination file already up to date.",
+                                    i+1, len(migrate_files))
 
             # we log this before we delete the source
             journal["s3://%s/%s" % (src_bucket, src_blob)] = "s3://%s/%s" % (dst_bucket, dst_blob)
 
             if not dry_run and not keep_source:
-                logger.info("[%4d/%4d] Deleting source s3://%s/%s",
+                logger.info("[%d/%d] Deleting source s3://%s/%s",
                             i+1, len(migrate_files), src_bucket, src_blob)
                 s3.delete_object(Bucket=src_bucket,
                                  Key=src_blob,
@@ -304,9 +311,20 @@ def configure_parser(main_subparsers):
                                  "The calling user is assumed to own the destination bucket and will pay "
                                  "to pull resources from the source bucket (i.e. (RequestPayer=request).""")
     subp.set_defaults(func=_cmd_migrate_bucket)
-    subp.add_argument("srcpath", metavar="SRCPATH", type=str, help="migrate keys matching this urlprefix (e.g. s3://my-bucket.example.org/)")
-    subp.add_argument("dstprefix", metavar="DSTPREFIX", type=str, help="migrate to this key prefix. (e.g. s3://dst-bucket.example.org/data/")
-    subp.add_argument("--srcprefix", dest="src_keyprefix", metavar="SRCPREFIX", default="", type=str, help="identify the portion of the SRCPATH that should not be copied to the destination.")
-    subp.add_argument("-n", dest="dry_run", action="store_true", default=False, help="dry run. just print what will be done")
-    subp.add_argument("--keep", dest="keep_source", action="store_true", default=False, help="keep files in source location")
-    subp.add_argument("--journal", dest="journal_path", type=str, default="migrate.journal.txt", help="append migrated records to this file")
+    subp.add_argument("srcpath", metavar="SRCPATH", type=str,
+                      help="migrate keys matching this urlprefix (e.g. s3://my-bucket.example.org/)")
+    subp.add_argument("dstprefix", metavar="DSTPREFIX", type=str,
+                      help="migrate to this key prefix. (e.g. s3://dst-bucket.example.org/data/")
+    subp.add_argument("--srcprefix", dest="src_keyprefix", metavar="SRCPREFIX", default="", type=str,
+                      help="identify the portion of the SRCPATH that should not be copied to the destination.")
+    subp.add_argument("-n", dest="dry_run", action="store_true", default=False,
+                      help="dry run. just print what will be done")
+    subp.add_argument("--keep", dest="keep_source", action="store_true", default=False,
+                      help="keep files in source location")
+    subp.add_argument("--journal", metavar="JPATH", dest="journal_path", type=str, default="migrate.journal.txt",
+                      help="append migrated records to this file")
+    subp.add_argument("--threads", metavar="THREADS", type=int, default=1,
+                      help="parallelize multipart uploads")
+    subp.add_argument("--all", action="store_true", dest="migrate_all", default=False,
+                      help="migrate all files you find, not just those produced by bunnies.")
+

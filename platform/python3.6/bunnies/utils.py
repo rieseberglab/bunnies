@@ -22,6 +22,31 @@ from .exc import NoSuchFile
 logger = logging.getLogger(__package__)
 
 
+def human_size(numbytes):
+    """converts a number of bytes into a readable string by humans"""
+    KB = 1024
+    MB = 1024*KB
+    GB = 1024*MB
+    TB = 1024*GB
+
+    if numbytes >= TB:
+        amount = numbytes / TB
+        unit = "TiB"
+    elif numbytes >= GB:
+        amount = numbytes / GB
+        unit = "GiB"
+    elif numbytes >= MB:
+        amount = numbytes / MB
+        unit = "MiB"
+    elif numbytes >= KB:
+        amount = numbytes / KB
+        unit = "KiB"
+    else:
+        amount = numbytes
+        unit = "B"
+    return "%.3f%s" % (amount, unit)
+
+
 def data_files(globname):
     """retrieves filenames under the data directory, matching the given file glob pattern (relative to the data dir)"""
     here = os.path.dirname(__file__)

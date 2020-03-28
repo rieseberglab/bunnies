@@ -139,7 +139,7 @@ def yield_in_chunks(fp, chunk_size_bytes):
         yield chunk
 
 
-def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
+def s3_copy_object(src_url, dst_url, client=None, logprefix="", threads=1, **kwargs):
     """copies the source blob to the destination. If the object is small this is
        a simple operation. If the object is > 5GB this performs a multipart upload
        copy.
@@ -185,7 +185,7 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
     else:
         new_meta = kwargs.pop('Metadata', {})
 
-    if src_size <= 5368709120:
+    if src_size <= 2 * 1024 * 1024 * 1024:  # AWS limit for putcopy is 5GB. simple puts are slow.
         copy_args = {}
         copy_args.update(kwargs)
         copy_args.update({
@@ -201,6 +201,8 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
         if 'ContentEncoding' in src_meta:
             copy_args['ContentEncoding'] = src_meta['ContentEncoding']
 
+        log.debug("%s copying %dB blob s3://%s/%s to s3://%s/%s", logprefix,
+                  src_size, src_bucket, src_key, dst_bucket, dst_key)
         return s3.copy_object(**copy_args)
 
     #
@@ -243,7 +245,7 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
         mpart = s3.create_multipart_upload(**create_args)
 
         def _gen_parts(size):
-            part_size = 5*1024*1024*1024 # 5GB
+            part_size = 128 * 1024 * 1024  # 128MB
             num_parts = (size + (part_size - 1)) // part_size
             for i in range(0, num_parts):
                 start = i * part_size
@@ -251,7 +253,7 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
                 if end >= size:
                     end = size - 1
 
-                yield (i+1, num_parts, start, end, size, {
+                yield (i+1, num_parts, size, {
                     'PartNumber': i+1, # must be a natural integer
                     'CopySourceRange': "bytes=%d-%d" % (start, end)
                 })
@@ -266,15 +268,57 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
         if "CopySourceIfMatch" not in part_args and 'CopySourceIfNoneMatch' not in part_args:
             part_args["CopySourceIfMatch"] = src_etag
 
-        # upload_part_copy foreach chunk
-        for partnum, totalparts, partstart, partend, totalsize, chunk_params in _gen_parts(src_size):
-            part_args.update(chunk_params)
-            log.info("%s starting multipart_upload_copy part:%03d/%03d range:%s total_B:%d",
-                     logprefix, partnum, totalparts, part_args['CopySourceRange'], totalsize)
-            part_res = s3.upload_part_copy(**part_args)
-            parts.append((part_args["PartNumber"], part_res['CopyPartResult']['ETag']))
+        def _upload_part_copy(call_args, totalparts, totalsize):
+            part_res = s3.upload_part_copy(**call_args)
+            return (call_args["PartNumber"], part_res['CopyPartResult']['ETag'])
 
-        # finish it
+        if threads < 2:
+            # upload_part_copy foreach chunk
+            for partnum, totalparts, totalsize, chunk_params in _gen_parts(src_size):
+                call_args = dict(part_args)
+                call_args.update(chunk_params)
+                parts.append(_upload_part_copy(call_args, totalparts, totalsize))
+        else:
+            upload_errors = []
+            future_to_partnum = {}
+            completed = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+                for i, (partnum, totalparts, totalsize, chunk_params) in enumerate(_gen_parts(src_size)):
+                    call_args = dict(part_args)
+                    call_args.update(chunk_params)
+                    parts.append(None)
+                    future = executor.submit(_upload_part_copy, call_args, totalparts, totalsize)
+                    future_to_partnum[future] = (i, call_args)
+
+                for future in concurrent.futures.as_completed(future_to_partnum):
+                    (icall, call_args) = future_to_partnum[future]
+                    try:
+                        upload_res = future.result()
+                    except ClientError as clierr:
+                        if clierr.response['Error']['Code'] == "PreconditionFailed":
+                            upload_errors.append(clierr)
+                            for future in future_to_partnum:
+                                future.cancel()
+
+                    except concurrent.futures.CancelledError:
+                        pass
+
+                    except Exception as exc:
+                        log.error("%s part number %d generated an error: %s", logprefix,
+                                  call_args['PartNumber'], str(exc))
+                        upload_errors.append(exc)
+                        for future in future_to_partnum:
+                            future.cancel()
+                    else:
+                        parts[icall] = upload_res
+                        completed += 1
+                        log.info("%s %.2f%% / %dB copied. Part #%d/%d -- %s completed.",
+                                 logprefix, completed*100.0/totalparts, src_size,
+                                 call_args['PartNumber'], totalparts, call_args['CopySourceRange']
+                        )
+            if upload_errors:
+                raise upload_errors[0]
+
         parts_document = {
             'Parts': [{'ETag': etag, 'PartNumber': pnum} for pnum, etag in parts]
         }
@@ -298,11 +342,15 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", **kwargs):
         })
         assert src_size == dst_meta['ContentLength']
 
-        log.debug("%s multipart copy bucket:%s key:%s result:%s",
-                  logprefix, dst_bucket, dst_key, completed)
+        # log.debug("%s multipart copy bucket:%s key:%s result:%s",
+        #           logprefix, dst_bucket, dst_key, completed)
         return completed
 
     except ClientError as clierr:
+        # no need to copy
+        if clierr.response['Error']['Code'] == "PreconditionFailed":
+            raise
+
         log.error("%s client error: %s", logprefix, str(clierr))
         raise ImportError("error in upload copy to bucket:%s key:%s: %s" %
                           (dst_bucket, dst_key, clierr.response['Error']['Code']))
