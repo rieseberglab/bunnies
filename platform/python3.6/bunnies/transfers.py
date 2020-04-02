@@ -295,11 +295,10 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", threads=1, **kwa
                     try:
                         upload_res = future.result()
                     except ClientError as clierr:
+                        upload_errors.append(clierr)
                         if clierr.response['Error']['Code'] == "PreconditionFailed":
-                            upload_errors.append(clierr)
                             for future in future_to_partnum:
                                 future.cancel()
-
                     except concurrent.futures.CancelledError:
                         pass
 
