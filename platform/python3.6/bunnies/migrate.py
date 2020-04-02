@@ -16,6 +16,7 @@ import io
 
 logger = logging.getLogger(__name__)
 
+
 class Journal(MutableMapping):
     def __init__(self, fname, read_only=False):
         self.fname = fname
@@ -115,7 +116,9 @@ def _bucket_keys(bucket, prefix, client=None):
                 yield info
 
         cont_token = resp.get('NextContinuationToken', None)
-        logger.debug("listed %d %s entries (NextContinuationToken=%s...)", total_count, bucket, cont_token[:20] if cont_token else None)
+        logger.debug("listed %d %s entries (NextContinuationToken=%s...)",
+                     total_count, bucket, cont_token[:20] if cont_token else None)
+
 
 def _rewrite_results_file(src_url, dst_url, translations, client=None):
     """parse it and translate all recognized URLs"""
@@ -127,14 +130,14 @@ def _rewrite_results_file(src_url, dst_url, translations, client=None):
         if isinstance(obj, str):
             if obj in translations:
                 _walk_obj.count += 1
-                #logger.info("translating %s to %s", obj, translations.get(obj))
+                # logger.info("translating %s to %s", obj, translations.get(obj))
                 return translations.get(obj)
             else:
                 return obj
         if isinstance(obj, (list, tuple)):
             return [_walk_obj(x) for x in obj]
         if isinstance(obj, dict):
-            return {_walk_obj(k): _walk_obj(v) for (k,v) in obj.items()}
+            return {_walk_obj(k): _walk_obj(v) for (k, v) in obj.items()}
         return obj
     _walk_obj.count = 0
 
@@ -150,6 +153,7 @@ def _rewrite_results_file(src_url, dst_url, translations, client=None):
     fp = io.BytesIO(json_str.encode('utf-8'))
     return transfers.s3_streaming_put(fp, dst_url, content_type=json_ct,
                                       meta=json_meta)
+
 
 def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
                         journal_path="migrate.journal.txt", dry_run=False,
@@ -341,4 +345,3 @@ def configure_parser(main_subparsers):
                       help="parallelize multipart uploads")
     subp.add_argument("--all", action="store_true", dest="migrate_all", default=False,
                       help="migrate all files you find, not just those produced by bunnies.")
-
