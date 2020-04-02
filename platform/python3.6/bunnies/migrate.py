@@ -307,7 +307,8 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
             if not dry_run:
                 _rewrite_results_file("s3://%s/%s" % (src_bucket, src_blob), "s3://%s/%s" % (dst_bucket, dst_blob),
                                       final_locations, client=s3)
-            #journal["s3://%s/%s" % (src_bucket, src_blob)] = "s3://%s/%s" % (dst_bucket, dst_blob)
+            # log this before deleting the source
+            journal["s3://%s/%s" % (src_bucket, src_blob)] = "s3://%s/%s" % (dst_bucket, dst_blob)
             if not dry_run and not keep_source:
                 logger.info("[%4d/%4d] Deleting source s3://%s/%s",
                             i + i_offset, len(src_blobs), src_bucket, src_blob)
