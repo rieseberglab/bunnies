@@ -222,6 +222,9 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
 
         # populate mapping of objects that need to still be moved.
         # we only consider files inside a bunnies result folder (unless migrate_all is True)
+
+        copy_count = 0
+        update_count = 0
         for sk in src_keys:
             if migrate_all or _is_nested(sk['Key'], transform_dirs):
                 dk = _dst_key(sk['Key'])
@@ -230,10 +233,13 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
 
                 # XXX
                 # skip the copy if it exists
-                #if dk not in dst_keys:
-                src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
+                if dk not in dst_keys:
+                    copy_count += 1
+                    src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
+                elif dst_keys[dk] < sk['LastModified']:
+                    update_count += 1
+                    src_blobs[sk['Key']] = {'dst_url': dk, 'src_info': sk}
 
-        logger.info("migrating %d blobs...", len(src_blobs))
         epoch = datetime.datetime(1970, 1, 1, 0, 0)
 
         # check if some targets overwrite some sources
@@ -243,65 +249,72 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
                     raise ValueError("target file s3://%s/%s overwrites source file s3://%s/%s" %
                                      (dst_bucket, dst_info['dst_url'], src_bucket, src_blob))
 
+        logger.info("migrating %d blobs (%d copies, %d updates)...",
+                    len(src_blobs), copy_count, update_count)
+
+        #
         # copy non-result files
+        #
+
         migrate_files = [(x, y) for (x, y) in src_blobs.items() if not _is_results_file(x)]
         logger.info("migrating %d non-result files", len(migrate_files))
         for i, (src_blob, dst_info) in enumerate(migrate_files):
 
             dst_blob = dst_info['dst_url']
             src_size = dst_info['src_info']['Size']
-            src_etag = dst_info['src_info']['ETag']
-            src_date = dst_info['src_info']['LastModified']
 
             modified_since = dst_keys.get(dst_blob, epoch)
             logger.info("[%d/%d] s3://%s/%s  (%s) => s3://%s/%s",
-                        i+1, len(migrate_files), src_bucket, src_blob, utils.human_size(src_size),
+                        i+1, len(src_blobs), src_bucket, src_blob, utils.human_size(src_size),
                         dst_bucket, dst_blob)
 
             if not dry_run:
-
                 try:
-                    res = transfers.s3_copy_object("s3://%s/%s" % (src_bucket, src_blob),
-                                                   "s3://%s/%s" % (dst_bucket, dst_blob),
-                                                   logprefix="[%d/%d]" % (i+1, len(migrate_files)),
-                                                   CopySourceIfModifiedSince=modified_since,
-                                                   TaggingDirective='COPY',
-                                                   RequestPayer='requester',
-                                                   threads=threads
+                    _ = transfers.s3_copy_object("s3://%s/%s" % (src_bucket, src_blob),
+                                                 "s3://%s/%s" % (dst_bucket, dst_blob),
+                                                 logprefix="[%d/%d]" % (i+1, len(src_blobs)),
+                                                 CopySourceIfModifiedSince=modified_since,
+                                                 TaggingDirective='COPY',
+                                                 RequestPayer='requester',
+                                                 threads=threads
                     )
                 except ClientError as clierr:
                     if clierr.response['Error']['Code'] == "PreconditionFailed":
                         logger.info("[%d/%d] Destination file already up to date.",
-                                    i+1, len(migrate_files))
+                                    i+1, len(src_blobs))
 
             # we log this before we delete the source
             journal["s3://%s/%s" % (src_bucket, src_blob)] = "s3://%s/%s" % (dst_bucket, dst_blob)
 
             if not dry_run and not keep_source:
                 logger.info("[%d/%d] Deleting source s3://%s/%s",
-                            i+1, len(migrate_files), src_bucket, src_blob)
+                            i+1, len(src_blobs), src_bucket, src_blob)
                 s3.delete_object(Bucket=src_bucket,
                                  Key=src_blob,
                                  RequestPayer='requester')
 
+        #
+        # migrate/rewrite result files
+        #
+        i_offset = len(migrate_files) + 1
         migrate_files = [(x, y) for (x, y) in src_blobs.items() if _is_results_file(x)]
         logger.info("migrating %d result manifests", len(migrate_files))
         for i, (src_blob, dst_info) in enumerate(migrate_files):
             dst_blob = dst_info['dst_url']
-            src_date = dst_info['src_info']['LastModified']
 
             logger.info("[%4d/%4d] s3://%s/%s  => s3://%s/%s",
-                        i+1, len(migrate_files), src_bucket, src_blob, dst_bucket, dst_blob)
+                        i + i_offset, len(src_blobs), src_bucket, src_blob, dst_bucket, dst_blob)
             if not dry_run:
                 _rewrite_results_file("s3://%s/%s" % (src_bucket, src_blob), "s3://%s/%s" % (dst_bucket, dst_blob),
                                       final_locations, client=s3)
             #journal["s3://%s/%s" % (src_bucket, src_blob)] = "s3://%s/%s" % (dst_bucket, dst_blob)
             if not dry_run and not keep_source:
                 logger.info("[%4d/%4d] Deleting source s3://%s/%s",
-                            i+1, len(migrate_files), src_bucket, src_blob)
+                            i + i_offset, len(src_blobs), src_bucket, src_blob)
                 s3.delete_object(Bucket=src_bucket,
                                  Key=src_blob,
                                  RequestPayer='requester')
+
 
 def configure_parser(main_subparsers):
     parser = main_subparsers.add_parser("migrate", help="tools for data migration")
