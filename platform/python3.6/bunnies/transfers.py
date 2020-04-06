@@ -185,7 +185,7 @@ def s3_copy_object(src_url, dst_url, client=None, logprefix="", threads=1, **kwa
     else:
         new_meta = kwargs.pop('Metadata', {})
 
-    if src_size <= 2 * 1024 * 1024 * 1024:  # AWS limit for putcopy is 5GB. simple puts are slow.
+    if src_size <= 512 * 1024 * 1024:  # AWS limit for putcopy is 5GB. simple puts are slow.
         copy_args = {}
         copy_args.update(kwargs)
         copy_args.update({
