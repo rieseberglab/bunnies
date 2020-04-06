@@ -147,12 +147,93 @@ def _rewrite_results_file(src_url, dst_url, translations, client=None):
         json_ct = info.get('ContentType', "application/json")
         json_obj = _walk_obj(json_obj)
 
-    logger.debug("performed %d URL translations: %s", _walk_obj.count)
+    logger.debug("performed %d URL translations in %s", _walk_obj.count, src_url)
 
     json_str = json.dumps(json_obj, sort_keys=True, indent=4, separators=(',', ': '))
     fp = io.BytesIO(json_str.encode('utf-8'))
     return transfers.s3_streaming_put(fp, dst_url, content_type=json_ct,
                                       meta=json_meta)
+
+
+def _is_results_file(keyname):
+    dirname, basename = os.path.split(keyname)
+    if basename == constants.TRANSFORM_RESULT_FILE:
+        return True
+    return False
+
+
+def _is_nested(fpath, indirs):
+    if not fpath:
+        return False
+
+    while fpath.endswith("/"):
+        fpath = fpath[:-1]
+
+    if fpath in indirs:
+        return True
+
+    parent, base = os.path.split(fpath)
+    return _is_nested(parent, indirs)
+
+
+def _cmd_migrate_restore(srcpath, tier, dry_run=False, days=3, **kwargs):
+    s3 = boto3.client("s3")
+    src_bucket, src_keypart = utils.s3_split_url(srcpath)
+
+    src_keys = [sk for sk in _bucket_keys(src_bucket, src_keypart, client=s3)]
+
+    def _is_frozen(sk):
+        return sk['StorageClass'] in ('GLACIER', 'DEEP_ARCHIVE')
+
+    thaw_count = 0
+    to_restore = [x for x in src_keys if _is_frozen(x)]
+
+    # S3 doens't preserve lastmodified across copies, so we instead
+    # copy them in order from oldest to newest -- this guarantees at least
+    # that index files will remain newer than their associated data files.
+    to_restore.sort(key=lambda sk: sk['LastModified'])
+
+    logger.info("%d keys need to be restored.", len(to_restore))
+
+    num_initiated = 0
+    num_ongoing = 0
+    num_done = 0
+
+    for i, sk in enumerate(to_restore):
+        logger.info("[%d/%d] restoring key s3://%s/%s", i+1, len(to_restore),
+                    src_bucket, sk['Key'])
+
+        if not dry_run:
+            head = s3.head_object(Bucket=src_bucket,
+                                  Key=sk['Key'],
+                                  RequestPayer='requester')
+            if head.get('Restore', None) is None:
+                logger.info("[%d/%d] initiating restore (tier=%s days=%d): s3://%s/%s",
+                            i+1, len(to_restore), tier, days, src_bucket, sk['Key'])
+                num_initiated += 1
+                s3.restore_object(
+                    Bucket=src_bucket,
+                    Key=sk['Key'],
+                    RestoreRequest={
+                        'Days': days,
+                        'GlacierJobParameters': {
+                            'Tier': tier,
+                        },
+                    },
+                    RequestPayer='requester'
+                )
+            elif head.get('Restore', "").startswith('ongoing-request="false"'):
+                logger.info("[%d/%d] already restored: s3://%s/%s",
+                            i+1, len(to_restore), src_bucket, sk['Key'])
+                num_done += 1
+            else:
+                logger.info("[%d/%d] restore ongoing:: s3://%s/%s",
+                            i+1, len(to_restore), src_bucket, sk['Key'])
+                num_ongoing += 1
+
+    logger.info("total restores: %d. (initated: %d  ongoing: %d  completed: %d)",
+                len(to_restore), num_initiated, num_ongoing, num_done)
+    return None
 
 
 def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
@@ -171,19 +252,6 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
         logger.info("stripping source prefix: %s", src_keyprefix)
     logger.info("moving files to: s3://%s/%s", dst_bucket, dst_keyprefix)
 
-    def _is_nested(fpath, indirs):
-        if not fpath:
-            return False
-
-        while fpath.endswith("/"):
-            fpath = fpath[:-1]
-
-        if fpath in indirs:
-            return True
-
-        parent, base = os.path.split(fpath)
-        return _is_nested(parent, indirs)
-
     def _dst_key(srckey):
         """srckey does not have the bucket information"""
         if srckey.startswith(src_keyprefix):
@@ -192,12 +260,6 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
         # logger.debug("skey:%s src_keyprefix:%s dst_keyprefix:%s dkey:%s",
         #              srckey, src_keyprefix, dst_keyprefix, out)
         return out
-
-    def _is_results_file(keyname):
-        dirname, basename = os.path.split(keyname)
-        if basename == constants.TRANSFORM_RESULT_FILE:
-            return True
-        return False
 
     with Journal.open(journal_path, read_only=dry_run) as journal:
 
@@ -252,6 +314,25 @@ def _cmd_migrate_bucket(srcpath, dstprefix, src_keyprefix="",
                 if dst_info['dst_url'] in src_blobs:
                     raise ValueError("target file s3://%s/%s overwrites source file s3://%s/%s" %
                                      (dst_bucket, dst_info['dst_url'], src_bucket, src_blob))
+
+        # check that all targets are currently available
+        # FIXME -- check ongoing state
+        storage_class_errors = []
+        for i, (src_blob, dst) in enumerate(src_blobs.items()):
+            sk = dst['src_info']
+            if sk['StorageClass'] in ('GLACIER', 'DEEP_ARCHIVE'):
+                logger.info("[%d/%d] checking glacier status for %s...",
+                            i+1, len(src_blobs), src_blob)
+                head = s3.head_object(Bucket=src_bucket,
+                                      Key=src_blob,
+                                      RequestPayer='requester')
+                if not head.get('Restore', "").startswith('ongoing-request="false"'):
+                    logger.error("blob %s is in not available. its storage class is: %s restore-status: %s",
+                                 src_blob, sk['StorageClass'], head.get('Restore', "''"))
+                    storage_class_errors.append(src_blob)
+
+        if storage_class_errors:
+            raise Exception("%d blobs are not available.", len(storage_class_errors))
 
         logger.info("migrating %d blobs (%d copies, %d updates)...",
                     len(src_blobs), copy_count, update_count)
@@ -345,3 +426,21 @@ def configure_parser(main_subparsers):
                       help="parallelize multipart uploads")
     subp.add_argument("--all", action="store_true", dest="migrate_all", default=False,
                       help="migrate all files you find, not just those produced by bunnies.")
+
+    subp = subparsers.add_parser("restore", help="Change the storage class of one or more files in the bucket. "
+                                 "The calling user is charged the request cost, but the owner will"
+                                 " incur storage costs for the restored objects.")
+    subp.set_defaults(func=_cmd_migrate_restore)
+    subp.add_argument("srcpath", metavar="SRCPATH", type=str,
+                      help="restore files matching this prefix. (e.g. s3://my-bucket/foo/)")
+    subp.add_argument("--tier", metavar="TIER", type=str, default="Standard",
+                      choices=["Expedited", "Standard", "Bulk"], help="""
+How quickly the restore from glacier should happen.
+   Expedited: 1-5min for GLACIER, n/a for DEEP_ARCHIVE
+   Standard: 3-5h for GLACIER, 12h for DEEP_ARCHIVE.
+             Bulk: 5-12h GLACIER, 48h DEEP_ARCHIVE.
+""")
+    subp.add_argument("--days", metavar="NDAYS", type=int, default=3,
+                      help="number of days to unfreeze the data for.")
+    subp.add_argument("-n", dest="dry_run", action="store_true", default=False,
+                      help="dry run. just print what will be done.")
