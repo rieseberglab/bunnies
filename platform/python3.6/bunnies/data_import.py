@@ -204,7 +204,10 @@ class DataImport(object):
         out_parsed = urlparse(dst_url)
         out_bucket = out_parsed.netloc
         in_parsed = urlparse(src_url)
-        in_path = os.path.join(in_parsed.netloc, in_parsed.path)
+        if in_parsed.path:
+            in_path = os.path.join(in_parsed.netloc, in_parsed.path)
+        else:
+            in_path = in_parsed.netloc
 
         if out_parsed.path.endswith("/") or out_parsed.path == "":
             dst_url = os.path.join(dst_url, os.path.split(in_path)[1])
@@ -350,7 +353,7 @@ class DataImport(object):
             s3.create_bucket(Bucket=bucket_name, **kwargs)
         except ClientError as clierr:
             code = clierr.response['Error']['Code']
-            if code == "BucketAlreadyOwnedByYou":
+            if code in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
                 return
 
             log.error("bucket creation failed: %s %s", clierr, code)
