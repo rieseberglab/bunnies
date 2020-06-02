@@ -127,6 +127,9 @@ def get_blob_meta(objecturl, logprefix="", **kwargs):
     logger.debug("%sfetching meta for URL: %s", logprefix, objecturl)
     s3 = boto3.client('s3')
     try:
+        # if 'RequestPayer' not in kwargs:
+        #     kwargs['RequestPayer'] = 'requester'
+
         head_res = s3.head_object(Bucket=bucketname, Key=keyname, **kwargs)
     except ClientError as clierr:
         if clierr.response['Error']['Code'] == '404':
