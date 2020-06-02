@@ -337,24 +337,33 @@ class Transform(Target, Cacheable):
             self._canonical_id = super(Transform, self).canonical_id
         return self._canonical_id
 
-    def output_prefix(self, bucket=None):
-        bucket = bucket or config['storage']['build_bucket']
-        return "s3://%(bucket)s/%(name)s-%(version)s-%(cid)s/" % {
+    def repo_path(self, write_url=None):
+        repo_path = write_url or config['storage']['write_url']
+        repo_path = repo_path if repo_path.startswith("s3://") else "s3://" + repo_path
+        repo_path = repo_path if repo_path.endswith("/") else repo_path + "/"
+        return repo_path
+
+    def output_prefix(self, write_url=None):
+        tail = "%(name)s-%(version)s-%(cid)s" % {
             'name': self.name,
-            'bucket': bucket,
             'version': self.version,
             'cid': self.canonical_id
+        }
+
+        return "%(repo_path)s%(tail)s/" % {
+            'output_path': self.repo_path(write_url=write_url),
+            'tail': tail
         }
 
     def exists(self):
         """
         check if the results of the transformation exist
         """
-        buckets = [config['storage']['build_bucket']]
-        for bucket in buckets:
+        paths = [config['storage']['write_url']] + config['storage']['read_urls']
+        for pfx in paths:
             try:
                 candidate = "%(prefix)s%(result)s" % {
-                    'prefix': self.output_prefix(bucket),
+                    'prefix': self.output_prefix(pfx),
                     'result': constants.TRANSFORM_RESULT_FILE
                 }
                 _ = utils.get_blob_meta(candidate, logprefix=self.kind)
